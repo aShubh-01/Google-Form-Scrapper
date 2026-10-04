@@ -81,7 +81,7 @@ export async function runScraper(payload) {
         executablePath: isLocal
           ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
           : await chromium.executablePath(),
-        headless: true,
+        headless: isLocal ? true : chromium.headless,
       });
 
       const page = await browser.newPage();
