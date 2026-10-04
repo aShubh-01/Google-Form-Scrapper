@@ -12,11 +12,13 @@
   "type": "module",
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
+    "@sparticuz/chromium": "^153.0.0",
     "cors": "^2.8.6",
     "dotenv": "^18.0.5",
     "express": "^5.2.1",
     "mongoose": "^9.10.4",
     "puppeteer": "^25.12.0",
+    "puppeteer-core": "^25.12.0",
     "razorpay": "^2.9.8",
     "stripe": "^23.0.0"
   }

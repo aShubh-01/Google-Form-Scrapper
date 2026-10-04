@@ -14,7 +14,8 @@
  */
 
 import "dotenv/config";
-import puppeteer from "puppeteer";
+import puppeteer from "puppeteer-core";
+import chromium from "@sparticuz/chromium";
 // payload imported programmatically now
 import identities from "./identities.json" with { type: "json" };
 
@@ -73,10 +74,14 @@ export async function runScraper(payload) {
 
     let browser;
     try {
+      const isLocal = process.platform === "darwin" || process.platform === "win32";
       browser = await puppeteer.launch({
-        headless,
-        args: ["--no-sandbox", "--disable-setuid-sandbox"],
-        defaultViewport: { width: 1280, height: 800 },
+        args: isLocal ? [] : chromium.args,
+        defaultViewport: chromium.defaultViewport,
+        executablePath: isLocal
+          ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+          : await chromium.executablePath(),
+        headless: true,
       });
 
       const page = await browser.newPage();
@@ -254,7 +259,15 @@ export async function runScraper(payload) {
 export async function checkFormAccess(formUrl) {
   let browser;
   try {
-    browser = await puppeteer.launch({ headless: true, args: ["--no-sandbox"] });
+    const isLocal = process.platform === "darwin" || process.platform === "win32";
+    browser = await puppeteer.launch({
+      args: isLocal ? [] : chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: isLocal
+        ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        : await chromium.executablePath(),
+      headless: isLocal ? true : chromium.headless,
+    });
     const page = await browser.newPage();
 
     await page.goto(formUrl, { waitUntil: "networkidle2" });
