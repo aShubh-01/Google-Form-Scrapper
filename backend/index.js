@@ -43,7 +43,7 @@ export async function runScraper(payload) {
   const {
     delayBetweenSubmissions = 2000,
     headless = false,
-    verbose  = true,
+    verbose = true,
     concurrentSubmissions = 1,
   } = options;
 
@@ -60,7 +60,7 @@ export async function runScraper(payload) {
   initAI();
 
   let successCount = 0;
-  let failCount    = 0;
+  let failCount = 0;
 
   // ---------------------------------------------------------------------------
   // Submission loop
@@ -92,8 +92,8 @@ export async function runScraper(payload) {
 
       // Shared context across all pages so AI keeps answers consistent
       const identity = identities[Math.floor(Math.random() * identities.length)];
-      const context = { 
-        previousAnswers: {}, 
+      const context = {
+        previousAnswers: {},
         identity,
         tone: getRandomTone(),
         behavior: getRandomBehavior()
@@ -114,6 +114,29 @@ export async function runScraper(payload) {
       while (true) {
         const pageHistory = await getPageHistory(page);
         log(`\n📄 [Sub ${i + 1}] Page ${pageNumber}  (history: ${pageHistory})`);
+
+        // Step 0: Check for top-level required email field (e.g., "Collect verified emails")
+        try {
+          log(`[Sub ${i + 1}] 🔍 Scanning for email input field...`);
+          const emailInput = await page.$('input[type="email"]');
+          if (emailInput) {
+            log(`[Sub ${i + 1}] 📧 Email input element found in DOM! Checking value...`);
+            const val = await page.evaluate(el => el.value, emailInput);
+            log(`[Sub ${i + 1}] 📧 Email input current value is: "${val}"`);
+
+            if (!val) {
+              log(`[Sub ${i + 1}] 📧 Filling with persona email: ${context.identity.email}`);
+              await emailInput.type(context.identity.email, { delay: 30 });
+              await sleep(500);
+            } else {
+              log(`[Sub ${i + 1}] 📧 Email field already has a value, skipping typing.`);
+            }
+          } else {
+            log(`[Sub ${i + 1}] ⚠️ No input[type="email"] element found on this page.`);
+          }
+        } catch (err) {
+          log(`[Sub ${i + 1}] ❌ Error during email field processing: ${err.message}`);
+        }
 
         // Step A: Extract all questions on this page
         const questions = await extractFormQuestions(page);
@@ -143,7 +166,7 @@ export async function runScraper(payload) {
             log(`\n[Sub ${i + 1}] ❓ "${question.title}"  (${question.type})`);
 
             let answer = pageAnswers[question.title];
-            
+
             // Fallback for dates/times which are not AI generated or if AI missed it
             if (answer === undefined) {
               if (question.type === "DATE") answer = generateRandomDate();
@@ -211,12 +234,12 @@ export async function runScraper(payload) {
     executing.add(p);
     const clean = () => executing.delete(p);
     p.then(clean);
-    
+
     if (executing.size >= concurrentSubmissions) {
       await Promise.race(executing);
     }
   }
-  
+
   await Promise.all(executing);
 
   // ---------------------------------------------------------------------------
@@ -233,9 +256,9 @@ export async function checkFormAccess(formUrl) {
   try {
     browser = await puppeteer.launch({ headless: true, args: ["--no-sandbox"] });
     const page = await browser.newPage();
-    
+
     await page.goto(formUrl, { waitUntil: "networkidle2" });
-    
+
     // Check if redirected to Google Login
     if (page.url().includes("accounts.google.com/ServiceLogin") || page.url().includes("accounts.google.com/signin")) {
       return { requiresLogin: true };
@@ -244,9 +267,9 @@ export async function checkFormAccess(formUrl) {
     // Check for "Sign in to continue" modal/text within the page
     const loginTextExists = await page.evaluate(() => {
       const bodyText = document.body.innerText;
-      return bodyText.includes("Sign in to continue") || 
-             bodyText.includes("To fill out this form, you must be signed in") ||
-             bodyText.includes("Sign in to your Google Account");
+      return bodyText.includes("Sign in to continue") ||
+        bodyText.includes("To fill out this form, you must be signed in") ||
+        bodyText.includes("Sign in to your Google Account");
     });
 
     if (loginTextExists) {

@@ -68,6 +68,7 @@ export const scaleByValue        = (value) => `[role="radio"][data-value="${valu
 // Date / Time  (type-code 9 / 10)
 // ---------------------------------------------------------------------------
 
+export const DATE_INPUT          = 'input[type="date"]';
 export const DATE_YEAR_INPUT     = 'input[aria-label="Year"]';
 export const DATE_MONTH_INPUT    = 'input[aria-label="Month"]';
 export const DATE_DAY_INPUT      = 'input[aria-label="Day"]';

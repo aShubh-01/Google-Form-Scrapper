@@ -1,14 +1,21 @@
 import express from "express";
 import cors from "cors";
 import mongoose from "mongoose";
+import dotenv from "dotenv";
 import { runScraper, checkFormAccess } from "./index.js";
+
+dotenv.config();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 // Connect to MongoDB
-const MONGODB_URI = "mongodb+srv://ashubh:shubh010xDmongodb@cluster01.khe8kxx.mongodb.net/smart_expense_tracker";
+const MONGODB_URI = process.env.MONGODB_URI;
+if (!MONGODB_URI) {
+  console.error("MONGODB_URI missing in .env");
+  process.exit(1);
+}
 mongoose.connect(MONGODB_URI)
   .then(() => console.log("📦 Connected to MongoDB"))
   .catch(err => console.error("MongoDB connection error:", err));
@@ -22,10 +29,27 @@ const orderSchema = new mongoose.Schema({
   status: { type: String, default: "PENDING" }, // PENDING | APPROVED
   createdAt: { type: Date, default: Date.now }
 });
-const Order = mongoose.model("Order", orderSchema);
+const Order = mongoose.model("Order", orderSchema, "form_automation");
 
 // State to keep track of running jobs (for dynamic load logic)
 let activeJobs = 0;
+const MAX_CONCURRENT_ORDERS = 1;
+const jobQueue = [];
+
+function queueJob(orderId, formUrl, numberOfResponses) {
+  jobQueue.push({ orderId, formUrl, numberOfResponses });
+  // Priority queue: Higher number of responses gets priority
+  jobQueue.sort((a, b) => b.numberOfResponses - a.numberOfResponses);
+  console.log(`[Queue] Added order ${orderId}. Queue length: ${jobQueue.length}`);
+  processQueue();
+}
+
+function processQueue() {
+  if (activeJobs >= MAX_CONCURRENT_ORDERS || jobQueue.length === 0) return;
+  
+  const job = jobQueue.shift();
+  startScrapingJob(job.orderId, job.formUrl, job.numberOfResponses);
+}
 
 // 0. Check Form Accessibility
 app.post("/api/check-form", async (req, res) => {
@@ -43,26 +67,34 @@ app.post("/api/check-form", async (req, res) => {
 // 1. Create a WhatsApp/Manual Order
 app.post("/api/create-order", async (req, res) => {
   const { formUrl, numberOfResponses } = req.body;
-  
+
   if (!formUrl || !numberOfResponses) {
     return res.status(400).json({ error: "Missing formUrl or numberOfResponses" });
+  }
+
+  // Check if order already exists for this form
+  try {
+    const existingOrder = await Order.findOne({ formUrl, status: { $in: ["PENDING", "APPROVED"] } });
+    if (existingOrder) {
+      return res.status(400).json({ error: "Order already placed" });
+    }
+  } catch (err) {
+    console.error("Error checking existing order:", err);
   }
 
   // Calculate pricing based on volume
   const calculatePrice = (count) => {
     let multiplier;
-    if (count <= 10) {
+    if (count <= 25) {
       multiplier = 3;
     } else if (count <= 50) {
-      multiplier = 3 - ((count - 10) / 40) * 1.0;
-    } else if (count <= 100) {
-      multiplier = 2 - ((count - 50) / 50) * 0.5;
+      multiplier = 2.5;
     } else {
-      multiplier = 1.5;
+      multiplier = 2;
     }
     return Math.round(count * multiplier);
   };
-  
+
   const amount = calculatePrice(numberOfResponses);
   const orderId = `ORD-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
 
@@ -73,12 +105,12 @@ app.post("/api/create-order", async (req, res) => {
       numberOfResponses,
       amount
     });
-    
+
     await newOrder.save();
 
     console.log(`[Order] Created manual order ${orderId} for ${numberOfResponses} responses (₹${amount})`);
-    
-    return res.json({ 
+
+    return res.json({
       id: orderId,
       amount: amount
     });
@@ -104,18 +136,18 @@ app.post("/api/admin/approve/:orderId", async (req, res) => {
   try {
     const { orderId } = req.params;
     const order = await Order.findOne({ orderId });
-    
+
     if (!order) return res.status(404).json({ error: "Order not found" });
     if (order.status === "APPROVED") return res.status(400).json({ error: "Order already approved" });
 
     order.status = "APPROVED";
     await order.save();
-    
-    console.log(`[Admin] Order ${orderId} approved. Starting scraper...`);
-    
-    // Start scraper in background
-    startScrapingJob(order.formUrl, order.numberOfResponses);
-    
+
+    console.log(`[Admin] Order ${orderId} approved. Queuing scraper job...`);
+
+    // Add to global priority queue
+    queueJob(orderId, order.formUrl, order.numberOfResponses);
+
     res.json({ success: true, message: `Order ${orderId} approved and processing started` });
   } catch (err) {
     console.error("Approval error:", err);
@@ -128,13 +160,13 @@ app.post("/api/admin/reject/:orderId", async (req, res) => {
   try {
     const { orderId } = req.params;
     const order = await Order.findOne({ orderId });
-    
+
     if (!order) return res.status(404).json({ error: "Order not found" });
     if (order.status !== "PENDING") return res.status(400).json({ error: "Only PENDING orders can be rejected" });
 
     order.status = "REJECTED";
     await order.save();
-    
+
     console.log(`[Admin] Order ${orderId} rejected.`);
     res.json({ success: true, message: `Order ${orderId} rejected.` });
   } catch (err) {
@@ -143,40 +175,34 @@ app.post("/api/admin/reject/:orderId", async (req, res) => {
   }
 });
 
-async function startScrapingJob(formUrl, numberOfResponses) {
-  // --- Dynamic Load Configuration ---
-  let concurrentSubmissions = 5;
-  let delayBetweenSubmissions = 500;
-
-  if (activeJobs > 2) {
-    concurrentSubmissions = 2;
-    delayBetweenSubmissions = 2000;
-  }
-  if (numberOfResponses <= 5) {
-    concurrentSubmissions = Math.min(numberOfResponses, 2);
-  }
+async function startScrapingJob(orderId, formUrl, numberOfResponses) {
+  // --- Strict RAM Protection for 1GB Server ---
+  // Run max 5 at a time for the active order
+  const concurrentSubmissions = Math.min(numberOfResponses, 5);
+  const delayBetweenSubmissions = 1000;
 
   const payload = {
     formUrl,
     numberOfResponses: parseInt(numberOfResponses, 10),
     options: {
       delayBetweenSubmissions,
-      headless: true, // always headless on backend
+      headless: true, // Must be true on backend to save RAM
       verbose: true,
       concurrentSubmissions,
     }
   };
 
   activeJobs++;
-  console.log(`[Backend] Starting scrape job. Active jobs: ${activeJobs}`);
-  
+  console.log(`[Backend] Starting scrape job for ${orderId}. Active orders: ${activeJobs}`);
+
   try {
     const results = await runScraper(payload);
-    console.log("[Backend] Scrape completed:", results);
+    console.log(`[Backend] Scrape completed for ${orderId}:`, results);
   } catch (error) {
-    console.error("[Backend] Scrape failed:", error);
+    console.error(`[Backend] Scrape failed for ${orderId}:`, error);
   } finally {
     activeJobs--;
+    processQueue(); // Start next job in queue
   }
 }
 

@@ -109,9 +109,15 @@ export async function getPageHistory(page) {
 
 export async function isConfirmationPage(page) {
   try {
-    const el = await page.waitForSelector(SEL.CONFIRMATION_MSG, { timeout: 5000 });
+    // Try the specific class first, or look for common confirmation link
+    const el = await page.waitForSelector(`${SEL.CONFIRMATION_MSG}, ${SEL.SUBMIT_ANOTHER_LINK}, .vHW8K`, { timeout: 5000 });
     return el !== null;
   } catch (err) {
+    // Fallback: check if page text contains "recorded" or "received"
+    const text = await page.evaluate(() => document.body.innerText);
+    if (text.includes("recorded") || text.includes("received") || text.includes("Submit another response")) {
+      return true;
+    }
     return false;
   }
 }
@@ -297,8 +303,34 @@ async function selectScalePoint(page, question, value) {
 }
 
 async function fillDateField(page, question, dateStr) {
-  const [year, month, day] = dateStr.split("-");
+  // Ensure dateStr is YYYY-MM-DD
+  let formattedDate = dateStr;
+  if (dateStr.includes("/")) {
+    // try to convert DD/MM/YYYY or MM/DD/YYYY to YYYY-MM-DD (rough guess)
+    const parts = dateStr.split("/");
+    if (parts.length === 3) {
+      if (parts[2].length === 4) formattedDate = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+    }
+  }
+
   const block = await getQuestionBlock(page, question);
+  
+  // Try new single date input first
+  const dateInput = await block.$(SEL.DATE_INPUT);
+  if (dateInput) {
+    // evaluate setting value directly. Do NOT use .type() as it conflicts.
+    await dateInput.evaluate((el, val) => {
+      el.focus();
+      el.value = val;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.blur();
+    }, formattedDate);
+    return;
+  }
+
+  // Fallback to legacy 3-field date
+  const [year, month, day] = formattedDate.split("-");
   const yearInput  = await block.$(SEL.DATE_YEAR_INPUT);
   const monthInput = await block.$(SEL.DATE_MONTH_INPUT);
   const dayInput   = await block.$(SEL.DATE_DAY_INPUT);

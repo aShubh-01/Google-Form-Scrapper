@@ -5,7 +5,13 @@ import { Bot, Sparkles, Zap, Lock, CreditCard, CheckCircle2, ArrowLeft, AlertCir
 function AdminPanel() {
   const [orders, setOrders] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(() => {
+    const savedAuth = localStorage.getItem('adminAuthExpiry');
+    if (savedAuth && new Date().getTime() < parseInt(savedAuth, 10)) {
+      return true;
+    }
+    return false;
+  });
   const [passwordInput, setPasswordInput] = useState('');
 
   useEffect(() => {
@@ -14,8 +20,14 @@ function AdminPanel() {
 
   const fetchOrders = async () => {
     try {
-      const res = await fetch('http://localhost:3001/api/admin/orders');
+      const res = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/admin/orders`);
       const data = await res.json();
+      const statusRank = { PENDING: 1, APPROVED: 2, REJECTED: 3 };
+      data.sort((a, b) => {
+        const rankA = statusRank[a.status] || 99;
+        const rankB = statusRank[b.status] || 99;
+        return rankA - rankB;
+      });
       setOrders(data);
     } catch (err) {
       console.error(err);
@@ -26,7 +38,7 @@ function AdminPanel() {
 
   const approveOrder = async (orderId) => {
     try {
-      const res = await fetch(`http://localhost:3001/api/admin/approve/${orderId}`, {
+      const res = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/admin/approve/${orderId}`, {
         method: 'POST'
       });
       const data = await res.json();
@@ -43,7 +55,7 @@ function AdminPanel() {
 
   const rejectOrder = async (orderId) => {
     try {
-      const res = await fetch(`http://localhost:3001/api/admin/reject/${orderId}`, {
+      const res = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/admin/reject/${orderId}`, {
         method: 'POST'
       });
       const data = await res.json();
@@ -67,6 +79,8 @@ function AdminPanel() {
             e.preventDefault();
             if (passwordInput === import.meta.env.VITE_ADMIN_PASSWORD) {
               setIsAuthenticated(true);
+              const expiry = new Date().getTime() + 24 * 60 * 60 * 1000;
+              localStorage.setItem('adminAuthExpiry', expiry.toString());
             } else {
               alert("Incorrect Password");
             }
@@ -162,9 +176,7 @@ export default function App() {
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
-  if (currentHash === '#/admin') {
-    return <AdminPanel />;
-  }
+
 
   const [formUrl, setFormUrl] = useState('');
   const [numberOfResponses, setNumberOfResponses] = useState(10);
@@ -175,17 +187,18 @@ export default function App() {
   const [view, setView] = useState('home');
   // Steps for 'home' view: 1 (Enter URL) -> 2 (Configure & Pay) | 'error' (Restricted form)
   const [step, setStep] = useState(1);
+  
+  // Track if they already clicked the WhatsApp button
+  const [hasClickedWhatsApp, setHasClickedWhatsApp] = useState(false);
 
   const calculatePrice = (count) => {
     let multiplier;
-    if (count <= 10) {
+    if (count <= 25) {
       multiplier = 3;
     } else if (count <= 50) {
-      multiplier = 3 - ((count - 10) / 40) * 1.0;
-    } else if (count <= 100) {
-      multiplier = 2 - ((count - 50) / 50) * 0.5;
+      multiplier = 2.5;
     } else {
-      multiplier = 1.5;
+      multiplier = 2;
     }
     return count * multiplier;
   };
@@ -197,7 +210,7 @@ export default function App() {
     setIsLoading(true);
 
     try {
-      const checkRes = await fetch('http://localhost:3001/api/check-form', {
+      const checkRes = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/check-form`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ formUrl })
@@ -223,7 +236,7 @@ export default function App() {
 
     try {
       // 0. Check if form is accessible
-      const checkRes = await fetch('http://localhost:3001/api/check-form', {
+      const checkRes = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/check-form`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ formUrl })
@@ -237,22 +250,27 @@ export default function App() {
       }
 
       // 1. Create order on backend (MongoDB)
-      const orderRes = await fetch('http://localhost:3001/api/create-order', {
+      const orderRes = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/create-order`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ formUrl, numberOfResponses })
       });
       const orderData = await orderRes.json();
 
-      if (orderData.error) throw new Error(orderData.error);
+      if (orderData.error) {
+        alert(`Error: ${orderData.error}`);
+        setIsLoading(false);
+        return;
+      }
 
       // 2. Set order info and show success screen for WhatsApp payment
       setOrderInfo(orderData);
       setView('success');
+      setHasClickedWhatsApp(false); // Reset WhatsApp click state
 
     } catch (err) {
       console.error(err);
-      alert('Failed to initiate checkout.');
+      alert('Failed to initiate checkout. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -293,14 +311,19 @@ export default function App() {
           <div className="text-sm text-slate-300">
             Scan the QR code to pay ₹{orderInfo.amount}, then send us the screenshot via WhatsApp.
           </div>
-          <a
-            href={whatsappUrl}
-            target="_blank"
-            rel="noopener noreferrer"
+          <button
+            onClick={() => {
+              if (hasClickedWhatsApp) {
+                alert("Order already placed! Please wait for our confirmation via WhatsApp.");
+              } else {
+                setHasClickedWhatsApp(true);
+                window.open(whatsappUrl, "_blank", "noopener,noreferrer");
+              }
+            }}
             className="mt-8 px-6 py-4 bg-[#25D366] hover:bg-[#20bd5a] text-white rounded-xl transition-all font-bold flex items-center justify-center gap-2 w-full"
           >
             I have paid & Send Screenshot
-          </a>
+          </button>
           <button
             onClick={() => { setView('home'); setStep(1); setFormUrl(''); setOrderInfo(null); }}
             className="mt-4 text-sm text-slate-400 hover:text-white transition-colors"
@@ -310,6 +333,10 @@ export default function App() {
         </div>
       </div>
     );
+  }
+
+  if (currentHash === '#/admin') {
+    return <AdminPanel />;
   }
 
   return (
@@ -414,7 +441,7 @@ export default function App() {
                   <input
                     type="number"
                     min="1"
-                    max="200"
+                    max="100"
                     value={numberOfResponses || ''}
                     onChange={(e) => {
                       let val = parseInt(e.target.value);
@@ -422,7 +449,7 @@ export default function App() {
                         setNumberOfResponses(0);
                         return;
                       }
-                      if (val > 200) val = 200;
+                      if (val > 100) val = 100;
                       setNumberOfResponses(val);
                     }}
                     onBlur={() => {
@@ -435,14 +462,14 @@ export default function App() {
                   <input
                     type="range"
                     min="1"
-                    max="200"
+                    max="100"
                     value={numberOfResponses}
                     onChange={(e) => setNumberOfResponses(parseInt(e.target.value) || 1)}
                     className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
                   />
                   <div className="flex justify-between text-xs text-slate-500 mt-2">
                     <span>1</span>
-                    <span>200</span>
+                    <span>100</span>
                   </div>
                 </div>
               </div>
