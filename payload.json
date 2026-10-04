@@ -1,0 +1,10 @@
+{
+  "formUrl": "https://docs.google.com/forms/d/e/1FAIpQLSeTQQK-MvB3vxaEn5Gfan7JGzrU06D1GJv00mYI8EAJtLKlfg/viewform",
+  "numberOfResponses": 1,
+  "options": {
+    "delayBetweenSubmissions": 500,
+    "headless": false,
+    "verbose": true,
+    "concurrentSubmissions": 1
+  }
+}
