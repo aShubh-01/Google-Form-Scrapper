@@ -62,6 +62,9 @@ export async function runScraper(payload) {
 
   let successCount = 0;
   let failCount = 0;
+  
+  // Track used identities for this scraping job to prevent duplicates
+  const usedIdentityIndices = new Set();
 
   // ---------------------------------------------------------------------------
   // Submission loop
@@ -96,7 +99,12 @@ export async function runScraper(payload) {
       await page.goto(formUrl, { waitUntil: "networkidle2" });
 
       // Shared context across all pages so AI keeps answers consistent
-      const identity = identities[Math.floor(Math.random() * identities.length)];
+      let identityIndex;
+      do {
+        identityIndex = Math.floor(Math.random() * identities.length);
+      } while (usedIdentityIndices.has(identityIndex) && usedIdentityIndices.size < identities.length);
+      usedIdentityIndices.add(identityIndex);
+      const identity = identities[identityIndex];
       const context = {
         previousAnswers: {},
         identity,
@@ -171,6 +179,15 @@ export async function runScraper(payload) {
             log(`\n[Sub ${i + 1}] ❓ "${question.title}"  (${question.type})`);
 
             let answer = pageAnswers[question.title];
+
+            // --- Explicit overrides for Name and Email fields ---
+            // Bypasses the AI and ensures exact identity matching
+            const lowerTitle = question.title.toLowerCase();
+            if (lowerTitle.includes("name") && question.type === "SHORT_TEXT") {
+              answer = context.identity.name;
+            } else if (lowerTitle.includes("email") && question.type === "SHORT_TEXT") {
+              answer = context.identity.email;
+            }
 
             // Fallback for dates/times which are not AI generated or if AI missed it
             if (answer === undefined) {
