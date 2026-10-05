@@ -117,6 +117,7 @@ function AdminPanel() {
                   <th className="p-4">Order ID</th>
                   <th className="p-4">Amount</th>
                   <th className="p-4">Responses</th>
+                  <th className="p-4">Progress</th>
                   <th className="p-4">Status</th>
                   <th className="p-4">Action</th>
                 </tr>
@@ -128,7 +129,20 @@ function AdminPanel() {
                     <td className="p-4">₹{o.amount}</td>
                     <td className="p-4">{o.numberOfResponses}</td>
                     <td className="p-4">
-                      <span className={`px-2 py-1 rounded-full text-xs font-bold ${o.status === 'APPROVED' ? 'bg-green-500/20 text-green-400' :
+                      {o.status === 'APPROVED' || o.status === 'COMPLETED' ? (
+                        <div className="text-sm">
+                          <div className="text-white font-semibold">{(o.successCount || 0) + (o.failCount || 0)} / {o.numberOfResponses}</div>
+                          <div className="text-green-400 text-xs">✅ {o.successCount || 0} Succeeded</div>
+                          <div className="text-red-400 text-xs">❌ {o.failCount || 0} Failed</div>
+                        </div>
+                      ) : (
+                        <span className="text-slate-500">—</span>
+                      )}
+                    </td>
+                    <td className="p-4">
+                      <span className={`px-2 py-1 rounded-full text-xs font-bold ${
+                        o.status === 'COMPLETED' ? 'bg-purple-500/20 text-purple-400' :
+                        o.status === 'APPROVED' ? 'bg-green-500/20 text-green-400' :
                         o.status === 'REJECTED' ? 'bg-red-500/20 text-red-400' :
                           'bg-yellow-500/20 text-yellow-400'
                         }`}>
@@ -156,7 +170,7 @@ function AdminPanel() {
                   </tr>
                 ))}
                 {orders.length === 0 && (
-                  <tr><td colSpan="5" className="p-4 text-center text-slate-400">No orders found.</td></tr>
+                  <tr><td colSpan="6" className="p-4 text-center text-slate-400">No orders found.</td></tr>
                 )}
               </tbody>
             </table>

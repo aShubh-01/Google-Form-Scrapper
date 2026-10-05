@@ -62,7 +62,7 @@ export async function runScraper(payload) {
 
   let successCount = 0;
   let failCount = 0;
-  
+
   // Track used identities for this scraping job to prevent duplicates
   const usedIdentityIndices = new Set();
 
@@ -84,7 +84,7 @@ export async function runScraper(payload) {
         executablePath: isLocal
           ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
           : await chromium.executablePath(),
-        headless: isLocal ? true : chromium.headless,
+        headless: false
       });
 
       const page = await browser.newPage();
@@ -224,6 +224,10 @@ export async function runScraper(payload) {
             successCount++;  // count it anyway — form may have redirected
           }
 
+          if (options.onProgress) {
+            options.onProgress(successCount, failCount);
+          }
+
           break; // exit page loop for this submission
 
         } else {
@@ -239,6 +243,9 @@ export async function runScraper(payload) {
       console.error(`[Sub ${i + 1}] ❌ Submission failed: ${err.message}`);
       if (verbose) console.error(err.stack);
       failCount++;
+      if (options.onProgress) {
+        options.onProgress(successCount, failCount);
+      }
     } finally {
       if (browser) {
         await browser.close();

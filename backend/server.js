@@ -26,10 +26,13 @@ const orderSchema = new mongoose.Schema({
   formUrl: { type: String, required: true },
   numberOfResponses: { type: Number, required: true },
   amount: { type: Number, required: true },
-  status: { type: String, default: "PENDING" }, // PENDING | APPROVED
+  status: { type: String, default: "PENDING" }, // PENDING | APPROVED | COMPLETED | REJECTED
+  successCount: { type: Number, default: 0 },
+  failCount: { type: Number, default: 0 },
   createdAt: { type: Date, default: Date.now }
 });
-const Order = mongoose.model("Order", orderSchema, "form_automation");
+const collectionName = process.env.ENV === "PRODUCTION" ? "orders_prod" : "orders_test";
+const Order = mongoose.model("Order", orderSchema, collectionName);
 
 // State to keep track of running jobs (for dynamic load logic)
 let activeJobs = 0;
@@ -181,6 +184,13 @@ async function startScrapingJob(orderId, formUrl, numberOfResponses) {
       headless: true, // Must be true on backend to save RAM
       verbose: true,
       concurrentSubmissions,
+      onProgress: (success, fail) => {
+        // Update DB without awaiting to not block the scraper
+        Order.updateOne(
+          { orderId },
+          { $set: { successCount: success, failCount: fail } }
+        ).catch(err => console.error("Error updating progress:", err));
+      }
     }
   };
 
@@ -190,6 +200,10 @@ async function startScrapingJob(orderId, formUrl, numberOfResponses) {
   try {
     const results = await runScraper(payload);
     console.log(`[Backend] Scrape completed for ${orderId}:`, results);
+    await Order.updateOne(
+      { orderId },
+      { $set: { status: "COMPLETED", successCount: results.successCount, failCount: results.failCount } }
+    );
   } catch (error) {
     console.error(`[Backend] Scrape failed for ${orderId}:`, error);
   } finally {

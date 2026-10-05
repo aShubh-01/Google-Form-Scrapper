@@ -44,7 +44,7 @@ export const CHECKBOX_CLICK_TARGET = 'div.uHMk6b';
 // ---------------------------------------------------------------------------
 
 /** Single-line text input (Short Answer) */
-export const SHORT_TEXT_INPUT    = 'input.whsOnd[type="text"]';
+export const SHORT_TEXT_INPUT    = 'input.whsOnd[type="text"], input.whsOnd[type="email"], input.whsOnd[type="url"], input.whsOnd[type="number"]';
 /** Multi-line textarea (Paragraph) */
 export const LONG_TEXT_INPUT     = 'textarea.KHxj8b';
 
