@@ -72,9 +72,9 @@ app.post("/api/create-order", async (req, res) => {
     return res.status(400).json({ error: "Missing formUrl or numberOfResponses" });
   }
 
-  // Check if order already exists for this form
+  // Check if there is already a PENDING order for this form
   try {
-    const existingOrder = await Order.findOne({ formUrl, status: { $in: ["PENDING", "APPROVED"] } });
+    const existingOrder = await Order.findOne({ formUrl, status: "PENDING" });
     if (existingOrder) {
       return res.status(400).json({ error: "Order already placed" });
     }
