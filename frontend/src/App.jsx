@@ -385,7 +385,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen p-4 py-12 md:py-4 flex flex-col md:flex-row items-center justify-center gap-12 max-w-6xl mx-auto">
+    <div className="min-h-screen p-4 py-8 md:py-12 flex flex-col md:flex-row items-center justify-center gap-8 md:gap-12 max-w-6xl mx-auto mt-4 md:mt-0">
 
       {/* Left side: Copy & Branding */}
       <div className="flex-1 space-y-8 text-center md:text-left">
@@ -394,12 +394,12 @@ export default function App() {
           <span>Instant Survey Responses</span>
         </div>
 
-        <h1 className="text-4xl md:text-7xl font-bold tracking-tight">
+        <h1 className="text-3xl sm:text-4xl md:text-6xl lg:text-7xl font-bold tracking-tight">
           The ultimate solution for <br />
           <span className="gradient-text">empty surveys.</span>
         </h1>
 
-        <p className="text-xl text-slate-400 max-w-lg mx-auto md:mx-0">
+        <p className="text-lg md:text-xl text-slate-400 max-w-lg mx-auto md:mx-0 px-2 md:px-0">
           Stop struggling to collect data. We deliver high-quality, perfectly balanced survey responses instantly so you can focus on your research, not your response count.
         </p>
 
@@ -430,11 +430,11 @@ export default function App() {
                   <label className="text-sm font-medium text-slate-300">Google Form URL</label>
                   <div className="group flex items-center">
                     <AlertCircle className="text-yellow-500 cursor-help hover:text-yellow-400 transition-colors" size={16} />
-                    <div className="absolute left-0 bottom-full mb-2 w-64 p-3 bg-slate-800 border border-slate-700 rounded-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10 shadow-xl pointer-events-none">
+                    <div className="absolute -left-2 md:left-0 bottom-full mb-2 w-56 md:w-64 p-3 bg-slate-800 border border-slate-700 rounded-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10 shadow-xl pointer-events-none">
                       <p className="text-xs text-slate-300 leading-relaxed font-normal">
                         <strong>Unsupported Questions:</strong><br />Our Automation does <em>not</em> support <strong>File Upload</strong> or <strong>Grid</strong> questions. Please ensure they are optional or remove them before proceeding.
                       </p>
-                      <div className="absolute left-32 -bottom-1.5 w-3 h-3 bg-slate-800 border-b border-r border-slate-700 rotate-45"></div>
+                      <div className="absolute left-4 md:left-32 -bottom-1.5 w-3 h-3 bg-slate-800 border-b border-r border-slate-700 rotate-45"></div>
                     </div>
                   </div>
                 </div>

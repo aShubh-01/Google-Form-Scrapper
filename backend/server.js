@@ -191,6 +191,7 @@ export const handler = async (event, context) => {
             Payload: Buffer.from(JSON.stringify({
               rawPath: "/scrap",
               requestContext: { http: { method: "POST" } },
+              headers: { "x-api-secret": process.env.API_SECRET },
               body: JSON.stringify({ orderId: orderId, isInternalRetry: true })
             }))
           });
