@@ -1,218 +1,243 @@
-import express from "express";
-import cors from "cors";
 import mongoose from "mongoose";
 import dotenv from "dotenv";
+import { LambdaClient, InvokeCommand } from "@aws-sdk/client-lambda";
 import { runScraper, checkFormAccess } from "./index.js";
+import Order from "./models/Order.js";
 
 dotenv.config();
 
-const app = express();
-app.use(cors());
-app.use(express.json());
+let isConnected = false;
 
-// Connect to MongoDB
-const MONGODB_URI = process.env.MONGODB_URI;
-if (!MONGODB_URI) {
-  console.error("MONGODB_URI missing in .env");
-  process.exit(1);
-}
-mongoose.connect(MONGODB_URI)
-  .then(() => console.log("📦 Connected to MongoDB"))
-  .catch(err => console.error("MongoDB connection error:", err));
-
-// Define Order Schema
-const orderSchema = new mongoose.Schema({
-  orderId: { type: String, required: true, unique: true },
-  formUrl: { type: String, required: true },
-  numberOfResponses: { type: Number, required: true },
-  amount: { type: Number, required: true },
-  status: { type: String, default: "PENDING" }, // PENDING | APPROVED | COMPLETED | REJECTED
-  successCount: { type: Number, default: 0 },
-  failCount: { type: Number, default: 0 },
-  createdAt: { type: Date, default: Date.now }
-});
-const collectionName = process.env.ENV === "PRODUCTION" ? "orders_prod" : "orders_test";
-const Order = mongoose.model("Order", orderSchema, collectionName);
-
-// State to keep track of running jobs (for dynamic load logic)
-let activeJobs = 0;
-const MAX_CONCURRENT_ORDERS = 1;
-const jobQueue = [];
-
-function queueJob(orderId, formUrl, numberOfResponses) {
-  jobQueue.push({ orderId, formUrl, numberOfResponses });
-  // Priority queue: Higher number of responses gets priority
-  jobQueue.sort((a, b) => b.numberOfResponses - a.numberOfResponses);
-  console.log(`[Queue] Added order ${orderId}. Queue length: ${jobQueue.length}`);
-  processQueue();
-}
-
-function processQueue() {
-  if (activeJobs >= MAX_CONCURRENT_ORDERS || jobQueue.length === 0) return;
-
-  const job = jobQueue.shift();
-  startScrapingJob(job.orderId, job.formUrl, job.numberOfResponses);
-}
-
-// 0. Check Form Accessibility
-app.post("/api/check-form", async (req, res) => {
-  const { formUrl } = req.body;
-  if (!formUrl) return res.status(400).json({ error: "Missing formUrl" });
-
-  try {
-    const { requiresLogin } = await checkFormAccess(formUrl);
-    res.json({ requiresLogin });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to verify form status" });
+async function connectToDatabase() {
+  if (isConnected) return;
+  const MONGODB_URI = process.env.MONGODB_URI;
+  if (!MONGODB_URI) {
+    throw new Error("MONGODB_URI missing in .env");
   }
-});
+  await mongoose.connect(MONGODB_URI);
+  isConnected = true;
+  console.log("📦 Connected to MongoDB");
+}
 
-// 1. Create a WhatsApp/Manual Order
-app.post("/api/create-order", async (req, res) => {
-  const { formUrl, numberOfResponses } = req.body;
+const lambdaClient = new LambdaClient({ region: process.env.AWS_REGION || "us-east-1" });
 
-  if (!formUrl || !numberOfResponses) {
-    return res.status(400).json({ error: "Missing formUrl or numberOfResponses" });
-  }
+export const handler = async (event, context) => {
+  await connectToDatabase();
 
+  let path = event.rawPath || event.path || "";
+  const method = event.requestContext?.http?.method || event.httpMethod || "";
 
-
-  // Calculate pricing based on volume
-  const calculatePrice = (count) => {
-    let multiplier;
-    if (count <= 25) {
-      multiplier = 3;
-    } else if (count <= 50) {
-      multiplier = 2.5;
-    } else {
-      multiplier = 2;
+  let body = {};
+  if (event.body) {
+    try {
+      body = typeof event.body === 'string' ? JSON.parse(event.body) : event.body;
+    } catch (e) {
+      console.warn("Could not parse event.body", e);
     }
-    return Math.round(count * multiplier);
+  }
+
+  const headers = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, x-api-secret",
+    "Content-Type": "application/json"
   };
 
-  const amount = calculatePrice(numberOfResponses);
-  const orderId = `ORD-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+  if (method === "OPTIONS") {
+    return { statusCode: 200, headers, body: "" };
+  }
+
+  // ---------------------------------------------------------------------------
+  // AUTHENTICATION
+  // ---------------------------------------------------------------------------
+  const providedSecret = event.headers?.['x-api-secret'] || event.headers?.['X-Api-Secret'];
+  const expectedSecret = process.env.API_SECRET;
+
+  if (expectedSecret && providedSecret !== expectedSecret) {
+    return { statusCode: 401, headers, body: JSON.stringify({ error: "Unauthorized: Invalid API Secret" }) };
+  }
 
   try {
-    const newOrder = new Order({
-      orderId,
-      formUrl,
-      numberOfResponses,
-      amount
-    });
+    if (path === "/check-form") {
+      const { formUrl } = body;
+      if (!formUrl) return { statusCode: 400, headers, body: JSON.stringify({ error: "Missing formUrl" }) };
+      const { requiresLogin } = await checkFormAccess(formUrl);
+      return { statusCode: 200, headers, body: JSON.stringify({ requiresLogin }) };
+    }
 
-    await newOrder.save();
-
-    console.log(`[Order] Created manual order ${orderId} for ${numberOfResponses} responses (₹${amount})`);
-
-    return res.json({
-      id: orderId,
-      amount: amount
-    });
-
-  } catch (error) {
-    console.error("Order creation error:", error);
-    res.status(500).json({ error: "Could not create order" });
-  }
-});
-
-// 2. Admin: Get all orders
-app.get("/api/admin/orders", async (req, res) => {
-  try {
-    const orders = await Order.find().sort({ createdAt: -1 });
-    res.json(orders);
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch orders" });
-  }
-});
-
-// 3. Admin: Approve order and trigger scraping
-app.post("/api/admin/approve/:orderId", async (req, res) => {
-  try {
-    const { orderId } = req.params;
-    const order = await Order.findOne({ orderId });
-
-    if (!order) return res.status(404).json({ error: "Order not found" });
-    if (order.status === "APPROVED") return res.status(400).json({ error: "Order already approved" });
-
-    order.status = "APPROVED";
-    await order.save();
-
-    console.log(`[Admin] Order ${orderId} approved. Queuing scraper job...`);
-
-    // Add to global priority queue
-    queueJob(orderId, order.formUrl, order.numberOfResponses);
-
-    res.json({ success: true, message: `Order ${orderId} approved and processing started` });
-  } catch (err) {
-    console.error("Approval error:", err);
-    res.status(500).json({ error: "Failed to approve order" });
-  }
-});
-
-// 4. Admin: Reject order
-app.post("/api/admin/reject/:orderId", async (req, res) => {
-  try {
-    const { orderId } = req.params;
-    const order = await Order.findOne({ orderId });
-
-    if (!order) return res.status(404).json({ error: "Order not found" });
-    if (order.status !== "PENDING") return res.status(400).json({ error: "Only PENDING orders can be rejected" });
-
-    order.status = "REJECTED";
-    await order.save();
-
-    console.log(`[Admin] Order ${orderId} rejected.`);
-    res.json({ success: true, message: `Order ${orderId} rejected.` });
-  } catch (err) {
-    console.error("Rejection error:", err);
-    res.status(500).json({ error: "Failed to reject order" });
-  }
-});
-
-async function startScrapingJob(orderId, formUrl, numberOfResponses) {
-  // --- Strict RAM Protection for 1GB Server ---
-  // Run max 5 at a time for the active order
-  const concurrentSubmissions = Math.min(numberOfResponses, 5);
-  const delayBetweenSubmissions = 1000;
-
-  const payload = {
-    formUrl,
-    numberOfResponses: parseInt(numberOfResponses, 10),
-    options: {
-      delayBetweenSubmissions,
-      headless: true, // Must be true on backend to save RAM
-      verbose: true,
-      concurrentSubmissions,
-      onProgress: (success, fail) => {
-        // Update DB without awaiting to not block the scraper
-        Order.updateOne(
-          { orderId },
-          { $set: { successCount: success, failCount: fail } }
-        ).catch(err => console.error("Error updating progress:", err));
+    if (path === "/create-order") {
+      const { formUrl, numberOfResponses } = body;
+      if (!formUrl || !numberOfResponses) {
+        return { statusCode: 400, headers, body: JSON.stringify({ error: "Missing formUrl or numberOfResponses" }) };
       }
+
+      const calculatePrice = (count) => {
+        let multiplier;
+        if (count <= 25) multiplier = 3;
+        else if (count <= 50) multiplier = 2.5;
+        else multiplier = 2;
+        return Math.round(count * multiplier);
+      };
+
+      const amount = calculatePrice(numberOfResponses);
+      const orderId = `ORD-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+
+      const newOrder = new Order({
+        orderId,
+        formUrl,
+        numberOfResponses,
+        amount
+      });
+      await newOrder.save();
+
+      console.log(`[Order] Created order ${orderId} for ${numberOfResponses} responses (₹${amount})`);
+      return { statusCode: 200, headers, body: JSON.stringify({ id: orderId, amount }) };
     }
-  };
 
-  activeJobs++;
-  console.log(`[Backend] Starting scrape job for ${orderId}. Active orders: ${activeJobs}`);
+    if (path === "/admin/orders") {
+      const orders = await Order.find().sort({ createdAt: -1 });
+      return { statusCode: 200, headers, body: JSON.stringify(orders) };
+    }
 
-  try {
-    const results = await runScraper(payload);
-    console.log(`[Backend] Scrape completed for ${orderId}:`, results);
-    await Order.updateOne(
-      { orderId },
-      { $set: { status: "COMPLETED", successCount: results.successCount, failCount: results.failCount } }
-    );
-  } catch (error) {
-    console.error(`[Backend] Scrape failed for ${orderId}:`, error);
-  } finally {
-    activeJobs--;
-    processQueue(); // Start next job in queue
+    if (path === "/reject") {
+      const { orderId } = body;
+      const order = await Order.findOne({ orderId });
+      if (!order) return { statusCode: 404, headers, body: JSON.stringify({ error: "Order not found" }) };
+      if (order.status !== "PENDING") return { statusCode: 400, headers, body: JSON.stringify({ error: "Only PENDING orders can be rejected" }) };
+
+      order.status = "REJECTED";
+      await order.save();
+      return { statusCode: 200, headers, body: JSON.stringify({ success: true, message: `Order ${orderId} rejected.` }) };
+    }
+
+    if (path === "/retry") {
+      const { orderId } = body;
+      if (!orderId) return { statusCode: 400, headers, body: JSON.stringify({ error: "Missing orderId" }) };
+
+      const order = await Order.findOne({ orderId });
+      if (!order) return { statusCode: 404, headers, body: JSON.stringify({ error: "Order not found" }) };
+
+      if ((order.failCount || 0) <= 0) {
+        return { statusCode: 400, headers, body: JSON.stringify({ error: "No failures to retry" }) };
+      }
+
+      console.log(`[Backend] Retrying ${order.failCount} failed responses for ${orderId}`);
+      order.failCount = 0;
+      order.status = "APPROVED";
+      await order.save();
+
+      // Fall through to /scrap logic so it handles async invocation / local execution correctly!
+      path = "/scrap";
+    }
+
+    if (path === "/scrap") {
+      const { orderId, isInternalRetry } = body;
+      if (!orderId) return { statusCode: 400, headers, body: JSON.stringify({ error: "Missing orderId" }) };
+
+      const order = await Order.findOne({ orderId });
+      if (!order) return { statusCode: 404, headers, body: JSON.stringify({ error: "Order not found" }) };
+
+      // If requested by the frontend initially, instantly return a response and invoke the worker asynchronously
+      // This prevents the frontend from timing out waiting for a 15 min lambda
+      if (!isInternalRetry && process.env.LAMBDA_TASK_ROOT && process.env.AWS_LAMBDA_FUNCTION_NAME) {
+        console.log(`[Admin] Order ${orderId} approved. Triggering async lambda worker...`);
+        order.status = "APPROVED";
+        await order.save();
+
+        const command = new InvokeCommand({
+          FunctionName: process.env.AWS_LAMBDA_FUNCTION_NAME,
+          InvocationType: "Event",
+          Payload: Buffer.from(JSON.stringify({
+            rawPath: "/scrap",
+            requestContext: { http: { method: "POST" } },
+            headers: { "x-api-secret": process.env.API_SECRET },
+            body: JSON.stringify({ orderId: orderId, isInternalRetry: true })
+          }))
+        });
+        await lambdaClient.send(command);
+        return { statusCode: 200, headers, body: JSON.stringify({ success: true, message: `Scraping triggered successfully` }) };
+      }
+
+      // -------------------------------------------------------------
+      // Worker Logic (Runs in background or locally)
+      // -------------------------------------------------------------
+      if (order.status === "PENDING") {
+        order.status = "APPROVED";
+        await order.save();
+      }
+
+      let remaining = order.numberOfResponses - ((order.successCount || 0) + (order.failCount || 0));
+      let isTimeRunningOut = false;
+
+      if (remaining <= 0) {
+        console.log(`[Backend] Order ${orderId} already completed (success: ${order.successCount || 0}, fail: ${order.failCount || 0}). Nothing left to do!`);
+      } else {
+        console.log(`[Backend] Starting/Resuming scrape job for ${orderId}, remaining: ${remaining}`);
+      }
+
+      while (remaining > 0) {
+        // Lambda max timeout is 15 minutes. Context object provides remaining time.
+        // We reserve 90 seconds (90000ms) buffer to safely exit and trigger the next function call.
+        const timeRemaining = typeof context.getRemainingTimeInMillis === "function"
+          ? context.getRemainingTimeInMillis()
+          : 99999999;
+
+        if (timeRemaining < 90000 && process.env.LAMBDA_TASK_ROOT && process.env.AWS_LAMBDA_FUNCTION_NAME) {
+          console.log(`[Backend] Time running out (${timeRemaining}ms left). Re-invoking Lambda to continue ${orderId}...`);
+          isTimeRunningOut = true;
+          const command = new InvokeCommand({
+            FunctionName: process.env.AWS_LAMBDA_FUNCTION_NAME,
+            InvocationType: "Event",
+            Payload: Buffer.from(JSON.stringify({
+              rawPath: "/scrap",
+              requestContext: { http: { method: "POST" } },
+              body: JSON.stringify({ orderId: orderId, isInternalRetry: true })
+            }))
+          });
+          await lambdaClient.send(command);
+          break; // Stop processing this chunk and let the Lambda die gracefully
+        }
+
+        // Process in manageable chunks (e.g. 5 at a time)
+        const concurrentSubmissions = Math.min(remaining, 5);
+        const payload = {
+          formUrl: order.formUrl,
+          numberOfResponses: concurrentSubmissions,
+          options: {
+            delayBetweenSubmissions: 1000,
+            headless: true, // Must be true in lambda
+            verbose: true,
+            concurrentSubmissions: concurrentSubmissions,
+            onProgress: () => { } // handled after chunk
+          }
+        };
+
+        const results = await runScraper(payload);
+
+        // Update database with chunk progress
+        const updatedOrder = await Order.findOneAndUpdate(
+          { orderId },
+          { $inc: { successCount: results.successCount || 0, failCount: results.failCount || 0 } },
+          { returnDocument: 'after' }
+        );
+
+        remaining = updatedOrder.numberOfResponses - ((updatedOrder.successCount || 0) + (updatedOrder.failCount || 0));
+        console.log(`[Backend] Finished chunk for ${orderId}. Remaining: ${remaining}`);
+      }
+
+      // If the loop finished naturally without timing out, mark as COMPLETED
+      if (!isTimeRunningOut && remaining <= 0) {
+        await Order.updateOne({ orderId }, { $set: { status: "COMPLETED" } });
+        console.log(`[Backend] Job ${orderId} fully completed!`);
+      }
+
+      return { statusCode: 200, headers, body: JSON.stringify({ success: true, message: `Worker cycle finished` }) };
+    }
+
+    return { statusCode: 404, headers, body: JSON.stringify({ error: "Endpoint Not Found" }) };
+
+  } catch (err) {
+    console.error("Handler error:", err);
+    return { statusCode: 500, headers, body: JSON.stringify({ error: "Internal Server Error" }) };
   }
-}
-
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 Backend server running on http://localhost:${PORT}`);
-});
+};

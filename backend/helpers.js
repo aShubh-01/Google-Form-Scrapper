@@ -191,16 +191,28 @@ async function fillShortText(page, question, answer) {
   const block = await getQuestionBlock(page, question);
   const input = await block.$(SEL.SHORT_TEXT_INPUT);
   if (!input) throw new Error(`[helpers] Short-text input not found: "${question.title}"`);
-  await input.click({ clickCount: 3 });
-  await input.type(answer, { delay: 30 });
+  
+  await input.evaluate((el, val) => {
+    el.focus();
+    el.value = val;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.blur();
+  }, answer);
 }
 
 async function fillLongText(page, question, answer) {
   const block = await getQuestionBlock(page, question);
   const ta = await block.$(SEL.LONG_TEXT_INPUT);
   if (!ta) throw new Error(`[helpers] Textarea not found: "${question.title}"`);
-  await ta.click({ clickCount: 3 });
-  await ta.type(answer, { delay: 20 });
+  
+  await ta.evaluate((el, val) => {
+    el.focus();
+    el.value = val;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.blur();
+  }, answer);
 }
 
 async function selectRadioOption(page, question, value) {
@@ -261,8 +273,26 @@ async function selectCheckboxOptions(page, question, values) {
     clickedAny = true;
   }
 
-  if (!clickedAny && values.length > 0) {
-    console.warn(`[helpers] Checkbox values ${JSON.stringify(values)} not matched for "${question.title}".`);
+  if (!clickedAny) {
+    if (values.length > 0) {
+      console.warn(`[helpers] Checkbox values ${JSON.stringify(values)} not matched for "${question.title}".`);
+    }
+    if (question.required && checkboxes.length > 0) {
+      console.warn(`[helpers] Question "${question.title}" is REQUIRED but no valid options were selected. Picking first option as fallback.`);
+      const fallbackCheckbox = checkboxes[0];
+      const visualBox = await fallbackCheckbox.$("div.uHMk6b");
+      if (visualBox) {
+        await visualBox.click();
+      } else {
+        const label = await fallbackCheckbox.evaluateHandle((el) => el.closest("label") || el);
+        await label.click();
+      }
+      await sleep(250);
+      const nowChecked = await fallbackCheckbox.evaluate((el) => el.getAttribute("aria-checked") === "true");
+      if (!nowChecked) {
+        await fallbackCheckbox.evaluate((el) => el.click());
+      }
+    }
   }
 }
 

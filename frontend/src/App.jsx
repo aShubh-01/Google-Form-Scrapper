@@ -20,7 +20,7 @@ function AdminPanel() {
 
   const fetchOrders = async () => {
     try {
-      const res = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/admin/orders`);
+      const res = await fetch(`${import.meta.env.VITE_BACKEND_URL}/admin/orders`, { headers: { 'x-api-secret': import.meta.env.VITE_API_SECRET } });
       const data = await res.json();
       const statusRank = { PENDING: 1, APPROVED: 2, REJECTED: 3 };
       data.sort((a, b) => {
@@ -38,8 +38,10 @@ function AdminPanel() {
 
   const approveOrder = async (orderId) => {
     try {
-      const res = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/admin/approve/${orderId}`, {
-        method: 'POST'
+      const res = await fetch(`${import.meta.env.VITE_BACKEND_URL}/scrap`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-secret': import.meta.env.VITE_API_SECRET },
+        body: JSON.stringify({ orderId })
       });
       const data = await res.json();
       if (data.success) {
@@ -55,8 +57,10 @@ function AdminPanel() {
 
   const rejectOrder = async (orderId) => {
     try {
-      const res = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/admin/reject/${orderId}`, {
-        method: 'POST'
+      const res = await fetch(`${import.meta.env.VITE_BACKEND_URL}/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-secret': import.meta.env.VITE_API_SECRET },
+        body: JSON.stringify({ orderId })
       });
       const data = await res.json();
       if (data.success) {
@@ -67,6 +71,25 @@ function AdminPanel() {
       }
     } catch (err) {
       alert("Failed to reject order.");
+    }
+  };
+
+  const retryOrder = async (orderId) => {
+    try {
+      const res = await fetch(`${import.meta.env.VITE_BACKEND_URL}/retry`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-secret': import.meta.env.VITE_API_SECRET },
+        body: JSON.stringify({ orderId })
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert(`Retrying failed responses for ${orderId}!`);
+        fetchOrders();
+      } else {
+        alert(data.error);
+      }
+    } catch (err) {
+      alert("Failed to retry order.");
     }
   };
 
@@ -166,6 +189,14 @@ function AdminPanel() {
                           </button>
                         </div>
                       )}
+                      {o.status === 'COMPLETED' && (o.failCount > 0) && (
+                        <button
+                          onClick={() => retryOrder(o.orderId)}
+                          className="px-3 py-1 bg-yellow-600 hover:bg-yellow-500 rounded text-sm font-semibold transition-all"
+                        >
+                          Retry {o.failCount} Failed
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -224,9 +255,9 @@ export default function App() {
     setIsLoading(true);
 
     try {
-      const checkRes = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/check-form`, {
+      const checkRes = await fetch(`${import.meta.env.VITE_BACKEND_URL}/check-form`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-api-secret': import.meta.env.VITE_API_SECRET },
         body: JSON.stringify({ formUrl })
       });
       const checkData = await checkRes.json();
@@ -250,9 +281,9 @@ export default function App() {
 
     try {
       // 0. Check if form is accessible
-      const checkRes = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/check-form`, {
+      const checkRes = await fetch(`${import.meta.env.VITE_BACKEND_URL}/check-form`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-api-secret': import.meta.env.VITE_API_SECRET },
         body: JSON.stringify({ formUrl })
       });
       const checkData = await checkRes.json();
@@ -264,9 +295,9 @@ export default function App() {
       }
 
       // 1. Create order on backend (MongoDB)
-      const orderRes = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/create-order`, {
+      const orderRes = await fetch(`${import.meta.env.VITE_BACKEND_URL}/create-order`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-api-secret': import.meta.env.VITE_API_SECRET },
         body: JSON.stringify({ formUrl, numberOfResponses })
       });
       const orderData = await orderRes.json();

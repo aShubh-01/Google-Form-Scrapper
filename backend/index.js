@@ -84,7 +84,7 @@ export async function runScraper(payload) {
         executablePath: isLocal
           ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
           : await chromium.executablePath(),
-        headless: false
+        headless: headless
       });
 
       const page = await browser.newPage();
@@ -131,21 +131,41 @@ export async function runScraper(payload) {
         // Step 0: Check for top-level required email field (e.g., "Collect verified emails")
         try {
           log(`[Sub ${i + 1}] 🔍 Scanning for email input field...`);
-          const emailInput = await page.$('input[type="email"]');
-          if (emailInput) {
-            log(`[Sub ${i + 1}] 📧 Email input element found in DOM! Checking value...`);
-            const val = await page.evaluate(el => el.value, emailInput);
-            log(`[Sub ${i + 1}] 📧 Email input current value is: "${val}"`);
+          const emailInputs = await page.$$('input[type="email"]');
+          let foundEmail = false;
+          for (const emailInput of emailInputs) {
+            // Use autocomplete="email" to reliably identify the top-level Google Verified email field 
+            // (Standard custom email questions have autocomplete="off")
+            const isAutocompleteEmail = await emailInput.evaluate(el => el.getAttribute('autocomplete') === 'email');
+            if (!isAutocompleteEmail) continue;
 
+            const isVisible = await emailInput.evaluate(el => {
+              const style = window.getComputedStyle(el);
+              return style && style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+            });
+            if (!isVisible) continue;
+
+            foundEmail = true;
+            log(`[Sub ${i + 1}] 📧 Top-level visible email input found! Checking value...`);
+            const val = await page.evaluate(el => el.value, emailInput);
+            
             if (!val) {
               log(`[Sub ${i + 1}] 📧 Filling with persona email: ${context.identity.email}`);
-              await emailInput.type(context.identity.email, { delay: 30 });
+              // Programmatic value setting is immune to OS window focus stealing when running concurrent non-headless browsers
+              await emailInput.evaluate((el, email) => {
+                el.focus();
+                el.value = email;
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                el.blur();
+              }, context.identity.email);
               await sleep(500);
             } else {
               log(`[Sub ${i + 1}] 📧 Email field already has a value, skipping typing.`);
             }
-          } else {
-            log(`[Sub ${i + 1}] ⚠️ No input[type="email"] element found on this page.`);
+          }
+          if (!foundEmail) {
+            log(`[Sub ${i + 1}] ⚠️ No visible input[type="email"] element found on this page.`);
           }
         } catch (err) {
           log(`[Sub ${i + 1}] ❌ Error during email field processing: ${err.message}`);
@@ -220,8 +240,17 @@ export async function runScraper(payload) {
             log(`[Sub ${i + 1}] ✅ Submission confirmed: "Your response has been recorded."`);
             successCount++;
           } else {
-            console.warn(`[Sub ${i + 1}] ⚠️  Submit clicked but confirmation not detected.`);
-            successCount++;  // count it anyway — form may have redirected
+            // Wait briefly and check for validation error popups
+            await sleep(500);
+            const validationVisible = await page.evaluate(() => {
+              const alerts = document.querySelectorAll('[role="alert"]');
+              return Array.from(alerts).some((el) => el.innerText?.trim().length > 0);
+            });
+            
+            if (validationVisible) {
+              throw new Error("Form validation blocked Submit — a required field was not filled correctly.");
+            }
+            throw new Error("Submit clicked but confirmation page was not detected.");
           }
 
           if (options.onProgress) {
