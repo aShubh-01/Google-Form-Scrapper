@@ -61,14 +61,25 @@ export const handler = async (event, context) => {
     if (path === "/check-form") {
       const { formUrl } = body;
       if (!formUrl) return { statusCode: 400, headers, body: JSON.stringify({ error: "Missing formUrl" }) };
+      
+      const isValidGoogleForm = /^https?:\/\/(docs\.google\.com\/forms\/|forms\.gle\/)/i.test(formUrl);
+      if (!isValidGoogleForm) {
+        return { statusCode: 400, headers, body: JSON.stringify({ error: "Invalid Google Form URL" }) };
+      }
+
       const { requiresLogin } = await checkFormAccess(formUrl);
       return { statusCode: 200, headers, body: JSON.stringify({ requiresLogin }) };
     }
 
     if (path === "/create-order") {
-      const { formUrl, numberOfResponses } = body;
-      if (!formUrl || !numberOfResponses) {
-        return { statusCode: 400, headers, body: JSON.stringify({ error: "Missing formUrl or numberOfResponses" }) };
+      const { customerName, formUrl, numberOfResponses } = body;
+      if (!customerName || !formUrl || !numberOfResponses) {
+        return { statusCode: 400, headers, body: JSON.stringify({ error: "Missing customerName, formUrl, or numberOfResponses" }) };
+      }
+
+      const isValidGoogleForm = /^https?:\/\/(docs\.google\.com\/forms\/|forms\.gle\/)/i.test(formUrl);
+      if (!isValidGoogleForm) {
+        return { statusCode: 400, headers, body: JSON.stringify({ error: "Invalid Google Form URL" }) };
       }
 
       const calculatePrice = (count) => {
@@ -84,6 +95,7 @@ export const handler = async (event, context) => {
 
       const newOrder = new Order({
         orderId,
+        customerName,
         formUrl,
         numberOfResponses,
         amount

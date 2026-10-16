@@ -5,6 +5,7 @@ dotenv.config();
 
 const orderSchema = new mongoose.Schema({
   orderId: { type: String, required: true, unique: true },
+  customerName: { type: String, required: true },
   formUrl: { type: String, required: true },
   numberOfResponses: { type: Number, required: true },
   amount: { type: Number, required: true },

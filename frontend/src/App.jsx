@@ -138,6 +138,7 @@ function AdminPanel() {
               <thead className="bg-black/50">
                 <tr>
                   <th className="p-4">Order ID</th>
+                  <th className="p-4">Customer</th>
                   <th className="p-4">Amount</th>
                   <th className="p-4">Responses</th>
                   <th className="p-4">Progress</th>
@@ -149,6 +150,7 @@ function AdminPanel() {
                 {orders.map(o => (
                   <tr key={o.orderId} className="bg-black/20">
                     <td className="p-4 font-mono">{o.orderId}</td>
+                    <td className="p-4">{o.customerName || 'Unknown'}</td>
                     <td className="p-4">₹{o.amount}</td>
                     <td className="p-4">{o.numberOfResponses}</td>
                     <td className="p-4">
@@ -223,7 +225,9 @@ export default function App() {
 
 
 
+  const [customerName, setCustomerName] = useState('');
   const [formUrl, setFormUrl] = useState('');
+  const [urlError, setUrlError] = useState('');
   const [numberOfResponses, setNumberOfResponses] = useState(10);
   const [isLoading, setIsLoading] = useState(false);
   const [orderInfo, setOrderInfo] = useState(null);
@@ -252,6 +256,13 @@ export default function App() {
   const handleVerify = async (e) => {
     e.preventDefault();
     if (!formUrl) return;
+
+    const isValidGoogleForm = /^https?:\/\/(docs\.google\.com\/forms\/|forms\.gle\/)/i.test(formUrl);
+    if (!isValidGoogleForm) {
+      setUrlError("Please enter a valid Google Form URL (e.g. https://forms.gle/...)");
+      return;
+    }
+
     setIsLoading(true);
 
     try {
@@ -262,7 +273,9 @@ export default function App() {
       });
       const checkData = await checkRes.json();
 
-      if (checkData.requiresLogin) {
+      if (checkData.error) {
+        setUrlError(checkData.error);
+      } else if (checkData.requiresLogin) {
         setStep('error');
       } else {
         setStep(2);
@@ -298,7 +311,7 @@ export default function App() {
       const orderRes = await fetch(`${import.meta.env.VITE_BACKEND_URL}/create-order`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-api-secret': import.meta.env.VITE_API_SECRET },
-        body: JSON.stringify({ formUrl, numberOfResponses })
+        body: JSON.stringify({ customerName, formUrl, numberOfResponses })
       });
       const orderData = await orderRes.json();
 
@@ -322,7 +335,7 @@ export default function App() {
   };
 
   if (view === 'success' && orderInfo) {
-    const whatsappMessage = encodeURIComponent(`Hi! I want to pay for order #${orderInfo.id}.\n\nAmount: ₹${orderInfo.amount}\n\nHere is my payment screenshot and my name:`);
+    const whatsappMessage = encodeURIComponent(`Hi! I am ${customerName}.\nI want to pay for order #${orderInfo.id}.\n\nAmount: ₹${orderInfo.amount}\n\nHere is my payment screenshot:`);
     const whatsappUrl = `https://wa.me/919404602679?text=${whatsappMessage}`;
 
     return (
@@ -443,10 +456,21 @@ export default function App() {
                   required
                   placeholder="https://forms.gle/..."
                   value={formUrl}
-                  onChange={(e) => setFormUrl(e.target.value)}
-                  className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                  onChange={(e) => {
+                    setFormUrl(e.target.value);
+                    setUrlError('');
+                  }}
+                  className={`w-full bg-black/40 border rounded-xl px-4 py-3 text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 transition-all ${
+                    urlError ? 'border-red-500 focus:ring-red-500' : 'border-white/10 focus:ring-blue-500'
+                  }`}
                 />
-                <p className="text-xs text-slate-500 mt-2 ml-1">Must be a public form with login restrictions disabled.</p>
+                {urlError ? (
+                  <p className="text-sm text-red-400 mt-2 ml-1 flex items-center gap-1">
+                    <AlertCircle size={14} /> {urlError}
+                  </p>
+                ) : (
+                  <p className="text-xs text-slate-500 mt-2 ml-1">Must be a public form with login restrictions disabled.</p>
+                )}
               </div>
 
 
@@ -481,7 +505,19 @@ export default function App() {
               </div>
 
               <div className="space-y-4 mt-6">
-                <div className="flex justify-between items-center ml-1">
+                <div className="space-y-2 text-left">
+                  <label className="text-sm font-medium text-slate-300 ml-1">Your Name</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Enter your name"
+                    value={customerName}
+                    onChange={(e) => setCustomerName(e.target.value)}
+                    className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                  />
+                </div>
+                
+                <div className="flex justify-between items-center ml-1 pt-2">
                   <label className="text-sm font-medium text-slate-300">Target Responses</label>
                   <input
                     type="number"
