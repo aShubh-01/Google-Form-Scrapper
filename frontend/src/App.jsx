@@ -165,11 +165,10 @@ function AdminPanel() {
                       )}
                     </td>
                     <td className="p-4">
-                      <span className={`px-2 py-1 rounded-full text-xs font-bold ${
-                        o.status === 'COMPLETED' ? 'bg-purple-500/20 text-purple-400' :
-                        o.status === 'APPROVED' ? 'bg-green-500/20 text-green-400' :
-                        o.status === 'REJECTED' ? 'bg-red-500/20 text-red-400' :
-                          'bg-yellow-500/20 text-yellow-400'
+                      <span className={`px-2 py-1 rounded-full text-xs font-bold ${o.status === 'COMPLETED' ? 'bg-purple-500/20 text-purple-400' :
+                          o.status === 'APPROVED' ? 'bg-green-500/20 text-green-400' :
+                            o.status === 'REJECTED' ? 'bg-red-500/20 text-red-400' :
+                              'bg-yellow-500/20 text-yellow-400'
                         }`}>
                         {o.status}
                       </span>
@@ -236,16 +235,16 @@ export default function App() {
   const [view, setView] = useState('home');
   // Steps for 'home' view: 1 (Enter URL) -> 2 (Configure & Pay) | 'error' (Restricted form)
   const [step, setStep] = useState(1);
-  
+
   // Track if they already clicked the WhatsApp button
   const [hasClickedWhatsApp, setHasClickedWhatsApp] = useState(false);
 
   const calculatePrice = (count) => {
-    // Tier 1: ₹10 per response for 1–50
-    // Tier 2: ₹5 per response for 51–100
-    const tier1 = Math.min(count, 50) * 10;
-    const tier2 = Math.max(count - 50, 0) * 5;
-    return tier1 + tier2;
+    // Flat rate based on quantity band:
+    // 1–50 responses  → ₹10 each
+    // 51–100 responses → ₹5 each
+    const ratePerResponse = count <= 50 ? 10 : 5;
+    return count * ratePerResponse;
   };
   const price = calculatePrice(numberOfResponses).toFixed(2);
 
@@ -456,9 +455,8 @@ export default function App() {
                     setFormUrl(e.target.value);
                     setUrlError('');
                   }}
-                  className={`w-full bg-black/40 border rounded-xl px-4 py-3 text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 transition-all ${
-                    urlError ? 'border-red-500 focus:ring-red-500' : 'border-white/10 focus:ring-blue-500'
-                  }`}
+                  className={`w-full bg-black/40 border rounded-xl px-4 py-3 text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 transition-all ${urlError ? 'border-red-500 focus:ring-red-500' : 'border-white/10 focus:ring-blue-500'
+                    }`}
                 />
                 {urlError ? (
                   <p className="text-sm text-red-400 mt-2 ml-1 flex items-center gap-1">
@@ -512,7 +510,7 @@ export default function App() {
                     className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
                   />
                 </div>
-                
+
                 <div className="flex justify-between items-center ml-1 pt-2">
                   <label className="text-sm font-medium text-slate-300">Target Responses</label>
                   <input
@@ -551,17 +549,11 @@ export default function App() {
                 </div>
               </div>
 
-                <div className="pt-6 border-t border-white/10 mt-6">
-                  <div className="flex justify-between items-center mb-1">
-                    <span className="text-slate-400">Total Price</span>
-                    <span className="text-3xl font-bold">₹{price}</span>
-                  </div>
-                  <div className="text-xs text-slate-500 text-right mb-6">
-                    {numberOfResponses <= 50
-                      ? `₹10 × ${numberOfResponses} response${numberOfResponses !== 1 ? 's' : ''}`
-                      : `₹10 × 50  +  ₹5 × ${numberOfResponses - 50}`
-                    }
-                  </div>
+              <div className="pt-6 border-t border-white/10 mt-6">
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-slate-400">Total Price</span>
+                  <span className="text-3xl font-bold">₹{price}</span>
+                </div>
 
                 <button
                   type="submit"

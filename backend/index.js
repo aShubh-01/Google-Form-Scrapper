@@ -331,8 +331,9 @@ export async function runScraper(payload) {
   const avgCostPerSubmission = successCount > 0 ? gc.costINR / successCount : 0;
   const avgCostPerRequest = gc.calls > 0 ? gc.costINR / gc.calls : 0;
 
-  // Tiered customer pricing: ₹10/response for 1–50, ₹5/response for 51–100
-  const chargedINR = Math.min(successCount, 50) * 10 + Math.max(successCount - 50, 0) * 5;
+  // Flat-rate customer pricing: ₹10 each for 1–50 responses, ₹5 each for 51–100
+  const ratePerResponse = successCount <= 50 ? 10 : 5;
+  const chargedINR = successCount * ratePerResponse;
   const chargedAvgPerSub = successCount > 0 ? chargedINR / successCount : 0;
   const profitINR = chargedINR - gc.costINR;
 
