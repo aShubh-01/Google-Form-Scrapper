@@ -34,24 +34,37 @@ export function initAI() {
 // ---------------------------------------------------------------------------
 
 /** Global totals across all submissions in this run */
-const globalStats = { inputTokens: 0, outputTokens: 0, costINR: 0, calls: 0 };
+const globalStats = { inputTokens: 0, candidatesTokens: 0, thoughtsTokens: 0, outputTokens: 0, costINR: 0, calls: 0 };
 
 /** Per-submission cost bucket — keyed by submission index */
 const submissionStats = {};
 
 /** Start tracking a new submission (call before the submission loop) */
 export function startSubmissionTracking(index) {
-  submissionStats[index] = { inputTokens: 0, outputTokens: 0, costINR: 0, calls: 0 };
+  submissionStats[index] = { inputTokens: 0, candidatesTokens: 0, thoughtsTokens: 0, outputTokens: 0, costINR: 0, calls: 0 };
 }
 
 /** Get accumulated cost data for a submission */
 export function getSubmissionCost(index) {
-  return submissionStats[index] || { inputTokens: 0, outputTokens: 0, costINR: 0, calls: 0 };
+  return submissionStats[index] || { inputTokens: 0, candidatesTokens: 0, thoughtsTokens: 0, outputTokens: 0, costINR: 0, calls: 0 };
 }
 
 /** Get total cost across all submissions */
 export function getGlobalCost() {
   return { ...globalStats };
+}
+
+/** Reset cost stats for a clean run */
+export function resetCostStats() {
+  globalStats.inputTokens = 0;
+  globalStats.candidatesTokens = 0;
+  globalStats.thoughtsTokens = 0;
+  globalStats.outputTokens = 0;
+  globalStats.costINR = 0;
+  globalStats.calls = 0;
+  for (const key of Object.keys(submissionStats)) {
+    delete submissionStats[key];
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -179,26 +192,45 @@ export async function generatePageAnswers(questions, context = {}, submissionInd
 export async function callAI(prompt, submissionIndex = null) {
   if (!geminiModel) throw new Error("[ai] AI client not initialized. Call initAI() first.");
 
+  const generationConfig = {
+    temperature: 0.8,
+  };
+  if (process.env.GEMINI_THINKING_BUDGET !== undefined) {
+    const budget = parseInt(process.env.GEMINI_THINKING_BUDGET, 10);
+    generationConfig.thinkingConfig = { thinkingBudget: budget };
+  }
+
   const result = await geminiModel.generateContent({
     contents: [{ role: "user", parts: [{ text: prompt }] }],
-    generationConfig: {
-      temperature: 0.8, // Slightly higher temp for more variation
-    }
+    generationConfig,
   });
 
   const metadata = result.response.usageMetadata;
   if (metadata) {
     const inputTokens = metadata.promptTokenCount || 0;
-    const outputTokens = metadata.candidatesTokenCount || 0;
-    // Gemini 2.5 Flash Pricing (per 1M tokens)
-    const inputCostUSD = (inputTokens / 1_000_000) * 0.075;
-    const outputCostUSD = (outputTokens / 1_000_000) * 0.30;
-    const totalCostINR = (inputCostUSD + outputCostUSD) * 83.5;
+    const candidatesTokens = metadata.candidatesTokenCount || 0;
+    const thoughtsTokens = metadata.thoughtsTokenCount || 0;
+    // Google bills thoughtsTokenCount as output tokens at $2.50 per 1M tokens
+    const outputTokens = candidatesTokens + thoughtsTokens;
 
-    console.log(`[ai] Tokens: Input=${inputTokens}, Output=${outputTokens} | Cost: ₹${totalCostINR.toFixed(6)}`);
+    // Gemini 2.5 Flash Official Pricing:
+    // Input: $0.30 per 1M tokens
+    // Output (candidates + thinking thoughts): $2.50 per 1M tokens
+    // Google Cloud India Billing Rate:
+    // Google Cloud converts at ~₹96.00/USD + applies 18% mandatory GST = ₹113.28 / USD effective rate
+    const EFFECTIVE_USD_TO_INR = process.env.GOOGLE_USD_TO_INR ? parseFloat(process.env.GOOGLE_USD_TO_INR) : 113.28;
+    const inputCostUSD = (inputTokens / 1_000_000) * 0.30;
+    const outputCostUSD = (outputTokens / 1_000_000) * 2.50;
+    const totalCostINR = (inputCostUSD + outputCostUSD) * EFFECTIVE_USD_TO_INR;
+
+    console.log(
+      `[ai] Tokens: Input=${inputTokens}, Candidates=${candidatesTokens}, Thoughts=${thoughtsTokens} (TotalOut=${outputTokens}) | Cost: ₹${totalCostINR.toFixed(4)}`
+    );
 
     // Accumulate into global stats
     globalStats.inputTokens += inputTokens;
+    globalStats.candidatesTokens += candidatesTokens;
+    globalStats.thoughtsTokens += thoughtsTokens;
     globalStats.outputTokens += outputTokens;
     globalStats.costINR += totalCostINR;
     globalStats.calls += 1;
@@ -206,6 +238,8 @@ export async function callAI(prompt, submissionIndex = null) {
     // Accumulate into per-submission stats if index provided
     if (submissionIndex !== null && submissionStats[submissionIndex]) {
       submissionStats[submissionIndex].inputTokens += inputTokens;
+      submissionStats[submissionIndex].candidatesTokens += candidatesTokens;
+      submissionStats[submissionIndex].thoughtsTokens += thoughtsTokens;
       submissionStats[submissionIndex].outputTokens += outputTokens;
       submissionStats[submissionIndex].costINR += totalCostINR;
       submissionStats[submissionIndex].calls += 1;

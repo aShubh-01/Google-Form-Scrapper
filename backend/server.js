@@ -83,11 +83,12 @@ export const handler = async (event, context) => {
       }
 
       const calculatePrice = (count) => {
-        let multiplier;
-        if (count <= 25) multiplier = 3;
-        else if (count <= 50) multiplier = 2.5;
-        else multiplier = 2;
-        return Math.round(count * multiplier);
+        let rate;
+        if (count <= 25) rate = 10;
+        else if (count <= 50) rate = 8;
+        else if (count <= 75) rate = 6;
+        else rate = 5;
+        return count * rate;
       };
 
       const amount = calculatePrice(numberOfResponses);
@@ -108,7 +109,39 @@ export const handler = async (event, context) => {
 
     if (path === "/admin/orders") {
       const orders = await Order.find().sort({ createdAt: -1 });
-      return { statusCode: 200, headers, body: JSON.stringify(orders) };
+
+      // Form-level aggregation (tally of all runs and costs across all orders for each form)
+      const formStats = {};
+      for (const o of orders) {
+        if ((o.successCount || 0) >= (o.numberOfResponses || 0) && (o.failCount || 0) > 0) {
+          o.failCount = 0;
+          Order.updateOne({ _id: o._id }, { $set: { failCount: 0, status: "COMPLETED" } }).catch(console.error);
+        }
+
+        const url = o.formUrl;
+        if (!url) continue;
+        if (!formStats[url]) {
+          formStats[url] = {
+            formUrl: url,
+            totalOrders: 0,
+            totalRevenue: 0,
+            totalCostINR: 0,
+            totalSuccess: 0,
+            totalFailed: 0,
+            totalRequested: 0,
+            totalRuns: 0
+          };
+        }
+        formStats[url].totalOrders += 1;
+        formStats[url].totalRevenue += (o.amount || 0);
+        formStats[url].totalCostINR += (o.totalCostINR || 0);
+        formStats[url].totalSuccess += Math.min(o.successCount || 0, o.numberOfResponses || 0);
+        formStats[url].totalFailed += Math.max(0, (o.numberOfResponses || 0) - (o.successCount || 0));
+        formStats[url].totalRequested += (o.numberOfResponses || 0);
+        formStats[url].totalRuns += (o.runs?.length || (o.lastRun?.processed ? 1 : 0));
+      }
+
+      return { statusCode: 200, headers, body: JSON.stringify({ orders, formStats }) };
     }
 
     if (path === "/reject") {
@@ -129,28 +162,40 @@ export const handler = async (event, context) => {
       const order = await Order.findOne({ orderId });
       if (!order) return { statusCode: 404, headers, body: JSON.stringify({ error: "Order not found" }) };
 
+      if ((order.successCount || 0) >= order.numberOfResponses) {
+        order.failCount = 0;
+        await order.save();
+        return { statusCode: 400, headers, body: JSON.stringify({ error: "Order is already 100% completed. All requested responses succeeded." }) };
+      }
+
       if ((order.failCount || 0) <= 0) {
         return { statusCode: 400, headers, body: JSON.stringify({ error: "No failures to retry" }) };
       }
 
       console.log(`[Backend] Retrying ${order.failCount} failed responses for ${orderId}`);
-      order.failCount = 0;
-      order.status = "APPROVED";
-      await order.save();
-
-      // Fall through to /scrap logic so it handles async invocation / local execution correctly!
+      body.isRetry = true;
       path = "/scrap";
     }
 
     if (path === "/scrap") {
-      const { orderId, isInternalRetry } = body;
+      const { orderId, isInternalRetry, isRetry } = body;
       if (!orderId) return { statusCode: 400, headers, body: JSON.stringify({ error: "Missing orderId" }) };
 
       const order = await Order.findOne({ orderId });
       if (!order) return { statusCode: 404, headers, body: JSON.stringify({ error: "Order not found" }) };
 
-      // If requested by the frontend initially, instantly return a response and invoke the worker asynchronously
-      // This prevents the frontend from timing out waiting for a 15 min lambda
+      // If all responses have already succeeded, complete the order and exit
+      if ((order.successCount || 0) >= order.numberOfResponses) {
+        if (order.failCount > 0 || order.status !== "COMPLETED") {
+          order.failCount = 0;
+          order.status = "COMPLETED";
+          await order.save();
+        }
+        console.log(`[Backend] Order ${orderId} is already 100% completed (${order.successCount}/${order.numberOfResponses} succeeded). Nothing left to process.`);
+        return { statusCode: 200, headers, body: JSON.stringify({ success: true, message: "Order is already 100% completed" }) };
+      }
+
+      // If requested by the frontend initially, instantly return a response and invoke the worker asynchronously (on Lambda)
       if (!isInternalRetry && process.env.LAMBDA_TASK_ROOT && process.env.AWS_LAMBDA_FUNCTION_NAME) {
         console.log(`[Admin] Order ${orderId} approved. Triggering async lambda worker...`);
         order.status = "APPROVED";
@@ -163,7 +208,7 @@ export const handler = async (event, context) => {
             rawPath: "/scrap",
             requestContext: { http: { method: "POST" } },
             headers: { "x-api-secret": process.env.API_SECRET },
-            body: JSON.stringify({ orderId: orderId, isInternalRetry: true })
+            body: JSON.stringify({ orderId, isInternalRetry: true, isRetry })
           }))
         });
         await lambdaClient.send(command);
@@ -173,30 +218,64 @@ export const handler = async (event, context) => {
       // -------------------------------------------------------------
       // Worker Logic (Runs in background or locally)
       // -------------------------------------------------------------
-      if (order.status === "PENDING") {
-        order.status = "APPROVED";
+      const runType = (isRetry || (order.failCount > 0 && order.successCount > 0)) ? "RETRY" : "INITIAL";
+      const targetResponses = runType === "RETRY"
+        ? Math.min(order.failCount || (order.numberOfResponses - (order.successCount || 0)), order.numberOfResponses)
+        : Math.max(0, order.numberOfResponses - (order.successCount || 0));
+
+      if (targetResponses <= 0) {
+        order.failCount = 0;
+        order.status = "COMPLETED";
         await order.save();
+        console.log(`[Backend] Order ${orderId} already completed. Nothing left to do!`);
+        return { statusCode: 200, headers, body: JSON.stringify({ success: true, message: "Nothing left to process" }) };
       }
 
-      let remaining = order.numberOfResponses - ((order.successCount || 0) + (order.failCount || 0));
+      if (runType === "RETRY") {
+        order.failCount = 0; // Reset fail count for new retry run
+      }
+      order.status = "APPROVED";
+      await order.save();
+
+      console.log(`[Backend] Starting ${runType} run for ${orderId}. Target responses: ${targetResponses}`);
+
+      const runRecord = {
+        runId: `RUN-${Math.random().toString(36).substr(2, 9).toUpperCase()}`,
+        runAt: new Date(),
+        type: runType,
+        targetResponses,
+        processed: 0,
+        successCount: 0,
+        failCount: 0,
+        costINR: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        candidatesTokens: 0,
+        thoughtsTokens: 0,
+        calls: 0
+      };
+
+      let remaining = targetResponses;
       let isTimeRunningOut = false;
 
-      if (remaining <= 0) {
-        console.log(`[Backend] Order ${orderId} already completed (success: ${order.successCount || 0}, fail: ${order.failCount || 0}). Nothing left to do!`);
-      } else {
-        console.log(`[Backend] Starting/Resuming scrape job for ${orderId}, remaining: ${remaining}`);
-      }
-
       while (remaining > 0) {
-        // Lambda max timeout is 15 minutes. Context object provides remaining time.
-        // We reserve 90 seconds (90000ms) buffer to safely exit and trigger the next function call.
-        const timeRemaining = typeof context.getRemainingTimeInMillis === "function"
+        const timeRemaining = typeof context?.getRemainingTimeInMillis === "function"
           ? context.getRemainingTimeInMillis()
           : 99999999;
 
         if (timeRemaining < 90000 && process.env.LAMBDA_TASK_ROOT && process.env.AWS_LAMBDA_FUNCTION_NAME) {
           console.log(`[Backend] Time running out (${timeRemaining}ms left). Re-invoking Lambda to continue ${orderId}...`);
           isTimeRunningOut = true;
+
+          // Save run progress
+          await Order.updateOne(
+            { orderId },
+            { 
+              $set: { lastRun: runRecord },
+              $push: { runs: runRecord }
+            }
+          );
+
           const command = new InvokeCommand({
             FunctionName: process.env.AWS_LAMBDA_FUNCTION_NAME,
             InvocationType: "Event",
@@ -204,11 +283,11 @@ export const handler = async (event, context) => {
               rawPath: "/scrap",
               requestContext: { http: { method: "POST" } },
               headers: { "x-api-secret": process.env.API_SECRET },
-              body: JSON.stringify({ orderId: orderId, isInternalRetry: true })
+              body: JSON.stringify({ orderId, isInternalRetry: true, isRetry: true })
             }))
           });
           await lambdaClient.send(command);
-          break; // Stop processing this chunk and let the Lambda die gracefully
+          break;
         }
 
         // Process in manageable chunks (e.g. 5 at a time)
@@ -221,27 +300,73 @@ export const handler = async (event, context) => {
             headless: true, // Must be true in lambda
             verbose: true,
             concurrentSubmissions: concurrentSubmissions,
-            onProgress: () => { } // handled after chunk
+            onProgress: () => { }
           }
         };
 
         const results = await runScraper(payload);
 
+        const chunkSuccess = results.successCount || 0;
+        const chunkFail = results.failCount || 0;
+        const chunkCost = results.cost?.totalINR || 0;
+        const chunkIn = results.cost?.inputTokens || 0;
+        const chunkOut = results.cost?.outputTokens || 0;
+        const chunkCand = results.cost?.candidatesTokens || 0;
+        const chunkThink = results.cost?.thoughtsTokens || 0;
+        const chunkCalls = results.cost?.totalCalls || 0;
+
+        // Accumulate into this run
+        runRecord.processed += (chunkSuccess + chunkFail);
+        runRecord.successCount += chunkSuccess;
+        runRecord.failCount += chunkFail;
+        runRecord.costINR += chunkCost;
+        runRecord.inputTokens += chunkIn;
+        runRecord.outputTokens += chunkOut;
+        runRecord.candidatesTokens += chunkCand;
+        runRecord.thoughtsTokens += chunkThink;
+        runRecord.calls += chunkCalls;
+
         // Update database with chunk progress
-        const updatedOrder = await Order.findOneAndUpdate(
+        const currentOrder = await Order.findOne({ orderId });
+        const newSuccess = Math.min((currentOrder.successCount || 0) + chunkSuccess, currentOrder.numberOfResponses);
+        const newFail = (currentOrder.failCount || 0) + chunkFail;
+
+        await Order.updateOne(
           { orderId },
-          { $inc: { successCount: results.successCount || 0, failCount: results.failCount || 0 } },
-          { returnDocument: 'after' }
+          {
+            $set: {
+              successCount: newSuccess,
+              failCount: newFail,
+              lastRun: runRecord,
+            },
+            $inc: {
+              totalCostINR: chunkCost,
+              totalInputTokens: chunkIn,
+              totalOutputTokens: chunkOut,
+              totalCalls: chunkCalls
+            }
+          }
         );
 
-        remaining = updatedOrder.numberOfResponses - ((updatedOrder.successCount || 0) + (updatedOrder.failCount || 0));
-        console.log(`[Backend] Finished chunk for ${orderId}. Remaining: ${remaining}`);
+        remaining = Math.max(0, targetResponses - runRecord.processed);
+        console.log(`[Backend] Finished chunk for ${orderId}. Run processed: ${runRecord.processed}/${targetResponses}. Remaining in run: ${remaining}`);
       }
 
-      // If the loop finished naturally without timing out, mark as COMPLETED
-      if (!isTimeRunningOut && remaining <= 0) {
-        await Order.updateOne({ orderId }, { $set: { status: "COMPLETED" } });
-        console.log(`[Backend] Job ${orderId} fully completed!`);
+      // If loop completed naturally without timeout
+      if (!isTimeRunningOut) {
+        const finalOrder = await Order.findOne({ orderId });
+        const isFullyDone = (finalOrder.successCount >= finalOrder.numberOfResponses) || remaining <= 0;
+        await Order.updateOne(
+          { orderId },
+          { 
+            $set: { 
+              status: isFullyDone ? "COMPLETED" : "APPROVED",
+              lastRun: runRecord
+            },
+            $push: { runs: runRecord }
+          }
+        );
+        console.log(`[Backend] Job ${orderId} finished! (Run Succeeded: ${runRecord.successCount}, Run Failed: ${runRecord.failCount}, Run Cost: ₹${runRecord.costINR.toFixed(4)})`);
       }
 
       return { statusCode: 200, headers, body: JSON.stringify({ success: true, message: `Worker cycle finished` }) };

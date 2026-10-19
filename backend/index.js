@@ -34,7 +34,7 @@ import {
   log,
 } from "./helpers.js";
 
-import { initAI, generatePageAnswers, generateRandomDate, generateRandomTime, getRandomTone, getRandomBehavior, startSubmissionTracking, getSubmissionCost, getGlobalCost } from "./ai.js";
+import { initAI, generatePageAnswers, generateRandomDate, generateRandomTime, getRandomTone, getRandomBehavior, startSubmissionTracking, getSubmissionCost, getGlobalCost, resetCostStats } from "./ai.js";
 
 // ---------------------------------------------------------------------------
 // Main Orchestrator
@@ -58,8 +58,9 @@ export async function runScraper(payload) {
   log(`   URL      : ${formUrl}`);
   log(`   Responses: ${numberOfResponses}`);
 
-  // 2. Initialize Gemini AI
+  // 2. Initialize Gemini AI & reset run stats
   initAI();
+  resetCostStats();
 
   let successCount = 0;
   let failCount = 0;
@@ -297,8 +298,8 @@ export async function runScraper(payload) {
       const statusIcon = submissionStatus === "success" ? "✅" : submissionStatus === "failed" ? "❌" : "⏳";
       log(`\n💰 [Sub ${i + 1}] Cost Summary  ${statusIcon} ${submissionStatus.toUpperCase()}`);
       log(`   AI Calls  : ${sc.calls}`);
-      log(`   Tokens    : ${sc.inputTokens.toLocaleString()} in  /  ${sc.outputTokens.toLocaleString()} out`);
-      log(`   Cost      : ₹${sc.costINR.toFixed(4)}  (~$${(sc.costINR / 83.5).toFixed(5)})`);
+      log(`   Tokens    : ${sc.inputTokens.toLocaleString()} in  /  ${sc.outputTokens.toLocaleString()} out${sc.thoughtsTokens ? ` (${sc.candidatesTokens.toLocaleString()} text + ${sc.thoughtsTokens.toLocaleString()} think)` : ""}`);
+      log(`   Cost      : ₹${sc.costINR.toFixed(4)}  (~$${(sc.costINR / 113.28).toFixed(5)})`);
 
       if (browser) {
         await browser.close();
@@ -337,6 +338,11 @@ export async function runScraper(payload) {
     successCount <= 25 ? 10 :
     successCount <= 50 ? 8  :
     successCount <= 75 ? 6  : 5;
+  const bandLabel =
+    successCount <= 25 ? "1–25 band" :
+    successCount <= 50 ? "26–50 band" :
+    successCount <= 75 ? "51–75 band" : "76–100 band";
+
   const chargedINR = successCount * ratePerResponse;
   const chargedAvgPerSub = successCount > 0 ? chargedINR / successCount : 0;
   const profitINR = chargedINR - gc.costINR;
@@ -348,22 +354,34 @@ export async function runScraper(payload) {
   log(`   ${"-".repeat(50)}`);
   log(`   Total AI calls       : ${gc.calls}`);
   log(`   Total input tokens   : ${gc.inputTokens.toLocaleString()}`);
-  log(`   Total output tokens  : ${gc.outputTokens.toLocaleString()}`);
+  log(`   Total output tokens  : ${gc.outputTokens.toLocaleString()}${gc.thoughtsTokens ? ` (${gc.candidatesTokens.toLocaleString()} text + ${gc.thoughtsTokens.toLocaleString()} thinking)` : ""}`);
   log(`   Total tokens         : ${(gc.inputTokens + gc.outputTokens).toLocaleString()}`);
   log(`   ${"-".repeat(50)}`);
-  log(`   AI Cost (actual)     : ₹${gc.costINR.toFixed(4)}  (~$${(gc.costINR / 83.5).toFixed(5)})`);
+  log(`   AI Cost (actual)     : ₹${gc.costINR.toFixed(4)}  (~$${(gc.costINR / 113.28).toFixed(5)})`);
   log(`   Per submission       : ₹${avgCostPerSubmission.toFixed(4)}`);
   log(`   Per AI request       : ₹${avgCostPerRequest.toFixed(6)}`);
   log(`   ${"-".repeat(50)}`);
   log(`   💰 Charged to user   : ₹${chargedINR.toFixed(2)}`);
-  log(`      Rate               : ₹${ratePerResponse}/response (${successCount <= 50 ? '1–50 band' : '51–100 band'})`);
+  log(`      Rate               : ₹${ratePerResponse}/response (${bandLabel})`);
   log(`      Avg per response   : ₹${chargedAvgPerSub.toFixed(2)}`);
   log(`      Net profit         : ₹${profitINR.toFixed(4)}`);
   log(`   ${"-".repeat(50)}`);
   log(`   Successful : ${successCount}  |  Failed : ${failCount}  |  Total : ${numberOfResponses}`);
   log(`${"═".repeat(60)}\n`);
 
-  return { successCount, failCount, cost: { totalINR: gc.costINR, chargedINR, totalCalls: gc.calls, inputTokens: gc.inputTokens, outputTokens: gc.outputTokens } };
+  return {
+    successCount,
+    failCount,
+    cost: {
+      totalINR: gc.costINR,
+      chargedINR,
+      totalCalls: gc.calls,
+      inputTokens: gc.inputTokens,
+      candidatesTokens: gc.candidatesTokens,
+      thoughtsTokens: gc.thoughtsTokens,
+      outputTokens: gc.outputTokens,
+    },
+  };
 }
 
 export async function checkFormAccess(formUrl) {
