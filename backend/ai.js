@@ -30,6 +30,31 @@ export function initAI() {
 }
 
 // ---------------------------------------------------------------------------
+// Cost Tracking
+// ---------------------------------------------------------------------------
+
+/** Global totals across all submissions in this run */
+const globalStats = { inputTokens: 0, outputTokens: 0, costINR: 0, calls: 0 };
+
+/** Per-submission cost bucket — keyed by submission index */
+const submissionStats = {};
+
+/** Start tracking a new submission (call before the submission loop) */
+export function startSubmissionTracking(index) {
+  submissionStats[index] = { inputTokens: 0, outputTokens: 0, costINR: 0, calls: 0 };
+}
+
+/** Get accumulated cost data for a submission */
+export function getSubmissionCost(index) {
+  return submissionStats[index] || { inputTokens: 0, outputTokens: 0, costINR: 0, calls: 0 };
+}
+
+/** Get total cost across all submissions */
+export function getGlobalCost() {
+  return { ...globalStats };
+}
+
+// ---------------------------------------------------------------------------
 // Core Answer Generation
 // ---------------------------------------------------------------------------
 
@@ -70,7 +95,7 @@ export function getRandomBehavior() {
  * @param {Object} context - { persona, previousAnswers, identity, formInfo, tone, behavior }
  * @returns {Promise<Object>} - A map of { "Question Title": "Answer" }
  */
-export async function generatePageAnswers(questions, context = {}) {
+export async function generatePageAnswers(questions, context = {}, submissionIndex = null) {
   // If there are no AI-applicable questions (e.g., just dates), we could skip. But we'll just run them all.
   if (!questions || questions.length === 0) return {};
 
@@ -123,7 +148,7 @@ export async function generatePageAnswers(questions, context = {}) {
   prompt += `\nYou MUST respond with ONLY valid JSON and nothing else. No markdown blocks, no \`\`\`json. Just the raw JSON object. The object keys MUST be the exact question titles, and the values must be your answers.\n`;
   prompt += `Example output:\n{\n  "What is your name?": "Rahul Sharma",\n  "Which colors do you like?": ["Red", "Blue"]\n}\n`;
 
-  const rawJsonStr = await callAI(prompt);
+  const rawJsonStr = await callAI(prompt, submissionIndex);
 
   try {
     // Attempt to parse. Often models wrap it in markdown anyway, so clean it.
@@ -151,7 +176,7 @@ export async function generatePageAnswers(questions, context = {}) {
  * @param {string} prompt
  * @returns {Promise<string>}
  */
-export async function callAI(prompt) {
+export async function callAI(prompt, submissionIndex = null) {
   if (!geminiModel) throw new Error("[ai] AI client not initialized. Call initAI() first.");
 
   const result = await geminiModel.generateContent({
@@ -166,11 +191,25 @@ export async function callAI(prompt) {
     const inputTokens = metadata.promptTokenCount || 0;
     const outputTokens = metadata.candidatesTokenCount || 0;
     // Gemini 2.5 Flash Pricing (per 1M tokens)
-    const inputCostUSD = (inputTokens / 1000000) * 0.075;
-    const outputCostUSD = (outputTokens / 1000000) * 0.30;
+    const inputCostUSD = (inputTokens / 1_000_000) * 0.075;
+    const outputCostUSD = (outputTokens / 1_000_000) * 0.30;
     const totalCostINR = (inputCostUSD + outputCostUSD) * 83.5;
-    
+
     console.log(`[ai] Tokens: Input=${inputTokens}, Output=${outputTokens} | Cost: ₹${totalCostINR.toFixed(6)}`);
+
+    // Accumulate into global stats
+    globalStats.inputTokens += inputTokens;
+    globalStats.outputTokens += outputTokens;
+    globalStats.costINR += totalCostINR;
+    globalStats.calls += 1;
+
+    // Accumulate into per-submission stats if index provided
+    if (submissionIndex !== null && submissionStats[submissionIndex]) {
+      submissionStats[submissionIndex].inputTokens += inputTokens;
+      submissionStats[submissionIndex].outputTokens += outputTokens;
+      submissionStats[submissionIndex].costINR += totalCostINR;
+      submissionStats[submissionIndex].calls += 1;
+    }
   }
 
   const text = result.response.text().trim();

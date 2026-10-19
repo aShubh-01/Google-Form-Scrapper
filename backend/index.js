@@ -34,7 +34,7 @@ import {
   log,
 } from "./helpers.js";
 
-import { initAI, generatePageAnswers, generateRandomDate, generateRandomTime, getRandomTone, getRandomBehavior } from "./ai.js";
+import { initAI, generatePageAnswers, generateRandomDate, generateRandomTime, getRandomTone, getRandomBehavior, startSubmissionTracking, getSubmissionCost, getGlobalCost } from "./ai.js";
 
 // ---------------------------------------------------------------------------
 // Main Orchestrator
@@ -77,6 +77,8 @@ export async function runScraper(payload) {
     log(`${"─".repeat(60)}`);
 
     let browser;
+    let submissionStatus = "pending";
+    startSubmissionTracking(i);
     try {
       const isLocal = process.platform === "darwin" || process.platform === "win32";
       browser = await puppeteer.launch({
@@ -188,7 +190,7 @@ export async function runScraper(payload) {
           // Step B: Ask AI to generate answers for ALL questions on this page in ONE go
           let pageAnswers = {};
           try {
-            pageAnswers = await generatePageAnswers(questions, context);
+            pageAnswers = await generatePageAnswers(questions, context, i);
           } catch (err) {
             console.error(`[Sub ${i + 1}] ⚠️  Failed to generate batch answers from AI:`, err);
             // Fallback: empty answers if AI fails entirely
@@ -240,6 +242,7 @@ export async function runScraper(payload) {
           if (await isConfirmationPage(page)) {
             log(`[Sub ${i + 1}] ✅ Submission confirmed: "Your response has been recorded."`);
             successCount++;
+            submissionStatus = "success";
           } else {
             // Wait briefly and check for validation error popups
             await sleep(500);
@@ -283,11 +286,20 @@ export async function runScraper(payload) {
     } catch (err) {
       console.error(`[Sub ${i + 1}] ❌ Submission failed: ${err.message}`);
       if (verbose) console.error(err.stack);
+      submissionStatus = "failed";
       failCount++;
       if (options.onProgress) {
         options.onProgress(successCount, failCount);
       }
     } finally {
+      // ── Per-submission cost report ─────────────────────────────────
+      const sc = getSubmissionCost(i);
+      const statusIcon = submissionStatus === "success" ? "✅" : submissionStatus === "failed" ? "❌" : "⏳";
+      log(`\n💰 [Sub ${i + 1}] Cost Summary  ${statusIcon} ${submissionStatus.toUpperCase()}`);
+      log(`   AI Calls  : ${sc.calls}`);
+      log(`   Tokens    : ${sc.inputTokens.toLocaleString()} in  /  ${sc.outputTokens.toLocaleString()} out`);
+      log(`   Cost      : ₹${sc.costINR.toFixed(4)}  (~$${(sc.costINR / 83.5).toFixed(5)})`);
+
       if (browser) {
         await browser.close();
       }
@@ -315,10 +327,28 @@ export async function runScraper(payload) {
   // ---------------------------------------------------------------------------
   // Done
   // ---------------------------------------------------------------------------
+  const gc = getGlobalCost();
+  const avgCostPerSubmission = successCount > 0 ? gc.costINR / successCount : 0;
+  const avgCostPerRequest = gc.calls > 0 ? gc.costINR / gc.calls : 0;
+
   log(`\n${"═".repeat(60)}`);
   log(`🎉 All done!  ✅ ${successCount} succeeded  |  ❌ ${failCount} failed`);
+  log(`${"═".repeat(60)}`);
+  log(`\n💵 COST BREAKDOWN`);
+  log(`   ${"-".repeat(50)}`);
+  log(`   Total AI calls       : ${gc.calls}`);
+  log(`   Total input tokens   : ${gc.inputTokens.toLocaleString()}`);
+  log(`   Total output tokens  : ${gc.outputTokens.toLocaleString()}`);
+  log(`   Total tokens         : ${(gc.inputTokens + gc.outputTokens).toLocaleString()}`);
+  log(`   ${"-".repeat(50)}`);
+  log(`   Total cost           : ₹${gc.costINR.toFixed(4)}  (~$${(gc.costINR / 83.5).toFixed(5)})`);
+  log(`   Per submission (ok)  : ₹${avgCostPerSubmission.toFixed(4)}`);
+  log(`   Per AI request       : ₹${avgCostPerRequest.toFixed(6)}`);
+  log(`   ${"-".repeat(50)}`);
+  log(`   Successful : ${successCount}  |  Failed : ${failCount}  |  Total : ${numberOfResponses}`);
   log(`${"═".repeat(60)}\n`);
-  return { successCount, failCount };
+
+  return { successCount, failCount, cost: { totalINR: gc.costINR, totalCalls: gc.calls, inputTokens: gc.inputTokens, outputTokens: gc.outputTokens } };
 }
 
 export async function checkFormAccess(formUrl) {
