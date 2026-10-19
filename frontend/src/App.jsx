@@ -227,7 +227,7 @@ export default function App() {
   const [customerName, setCustomerName] = useState('');
   const [formUrl, setFormUrl] = useState('');
   const [urlError, setUrlError] = useState('');
-  const [numberOfResponses, setNumberOfResponses] = useState(10);
+  const [numberOfResponses, setNumberOfResponses] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
   const [orderInfo, setOrderInfo] = useState(null);
 
@@ -241,10 +241,16 @@ export default function App() {
 
   const calculatePrice = (count) => {
     // Flat rate based on quantity band:
-    // 1–50 responses  → ₹10 each
-    // 51–100 responses → ₹5 each
-    const ratePerResponse = count <= 50 ? 10 : 5;
-    return count * ratePerResponse;
+    //  1–25  → ₹10 each
+    // 26–50  → ₹8 each
+    // 51–75  → ₹6 each
+    // 76–100 → ₹5 each
+    let rate;
+    if (count <= 25)       rate = 10;
+    else if (count <= 50)  rate = 8;
+    else if (count <= 75)  rate = 6;
+    else                   rate = 5;
+    return count * rate;
   };
   const price = calculatePrice(numberOfResponses).toFixed(2);
 
@@ -533,6 +539,25 @@ export default function App() {
                     className="w-24 bg-black/40 border border-white/10 rounded-lg px-3 py-1.5 text-white font-bold text-right focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
+
+                {/* Preset quick-select buttons */}
+                <div className="flex gap-2 mt-3">
+                  {[25, 50, 75, 100].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setNumberOfResponses(preset)}
+                      className={`flex-1 py-1.5 rounded-lg text-sm font-semibold border transition-all ${
+                        numberOfResponses === preset
+                          ? 'bg-blue-600 border-blue-500 text-white'
+                          : 'bg-black/30 border-white/10 text-slate-400 hover:border-blue-500/50 hover:text-white'
+                      }`}
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
+
                 <div>
                   <input
                     type="range"
@@ -553,6 +578,14 @@ export default function App() {
                 <div className="flex justify-between items-center mb-1">
                   <span className="text-slate-400">Total Price</span>
                   <span className="text-3xl font-bold">₹{price}</span>
+                </div>
+                <div className="text-xs text-slate-500 text-right mb-6">
+                  {numberOfResponses} response{numberOfResponses !== 1 ? 's' : ''} &times; ₹{
+                    numberOfResponses <= 25 ? 10
+                    : numberOfResponses <= 50 ? 8
+                    : numberOfResponses <= 75 ? 6
+                    : 5
+                  }/each
                 </div>
 
                 <button

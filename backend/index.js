@@ -331,8 +331,12 @@ export async function runScraper(payload) {
   const avgCostPerSubmission = successCount > 0 ? gc.costINR / successCount : 0;
   const avgCostPerRequest = gc.calls > 0 ? gc.costINR / gc.calls : 0;
 
-  // Flat-rate customer pricing: ₹10 each for 1–50 responses, ₹5 each for 51–100
-  const ratePerResponse = successCount <= 50 ? 10 : 5;
+  // Flat-rate customer pricing (4 bands):
+  //  1–25  → ₹10 each  |  26–50 → ₹8 each  |  51–75 → ₹6 each  |  76–100 → ₹5 each
+  const ratePerResponse =
+    successCount <= 25 ? 10 :
+    successCount <= 50 ? 8  :
+    successCount <= 75 ? 6  : 5;
   const chargedINR = successCount * ratePerResponse;
   const chargedAvgPerSub = successCount > 0 ? chargedINR / successCount : 0;
   const profitINR = chargedINR - gc.costINR;
@@ -352,7 +356,7 @@ export async function runScraper(payload) {
   log(`   Per AI request       : ₹${avgCostPerRequest.toFixed(6)}`);
   log(`   ${"-".repeat(50)}`);
   log(`   💰 Charged to user   : ₹${chargedINR.toFixed(2)}`);
-  log(`      Tier breakdown     : ₹10 × ${Math.min(successCount, 50)}${successCount > 50 ? `  +  ₹5 × ${successCount - 50}` : ''}`);
+  log(`      Rate               : ₹${ratePerResponse}/response (${successCount <= 50 ? '1–50 band' : '51–100 band'})`);
   log(`      Avg per response   : ₹${chargedAvgPerSub.toFixed(2)}`);
   log(`      Net profit         : ₹${profitINR.toFixed(4)}`);
   log(`   ${"-".repeat(50)}`);
