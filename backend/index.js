@@ -331,6 +331,11 @@ export async function runScraper(payload) {
   const avgCostPerSubmission = successCount > 0 ? gc.costINR / successCount : 0;
   const avgCostPerRequest = gc.calls > 0 ? gc.costINR / gc.calls : 0;
 
+  // Tiered customer pricing: ₹10/response for 1–50, ₹5/response for 51–100
+  const chargedINR = Math.min(successCount, 50) * 10 + Math.max(successCount - 50, 0) * 5;
+  const chargedAvgPerSub = successCount > 0 ? chargedINR / successCount : 0;
+  const profitINR = chargedINR - gc.costINR;
+
   log(`\n${"═".repeat(60)}`);
   log(`🎉 All done!  ✅ ${successCount} succeeded  |  ❌ ${failCount} failed`);
   log(`${"═".repeat(60)}`);
@@ -341,14 +346,19 @@ export async function runScraper(payload) {
   log(`   Total output tokens  : ${gc.outputTokens.toLocaleString()}`);
   log(`   Total tokens         : ${(gc.inputTokens + gc.outputTokens).toLocaleString()}`);
   log(`   ${"-".repeat(50)}`);
-  log(`   Total cost           : ₹${gc.costINR.toFixed(4)}  (~$${(gc.costINR / 83.5).toFixed(5)})`);
-  log(`   Per submission (ok)  : ₹${avgCostPerSubmission.toFixed(4)}`);
+  log(`   AI Cost (actual)     : ₹${gc.costINR.toFixed(4)}  (~$${(gc.costINR / 83.5).toFixed(5)})`);
+  log(`   Per submission       : ₹${avgCostPerSubmission.toFixed(4)}`);
   log(`   Per AI request       : ₹${avgCostPerRequest.toFixed(6)}`);
+  log(`   ${"-".repeat(50)}`);
+  log(`   💰 Charged to user   : ₹${chargedINR.toFixed(2)}`);
+  log(`      Tier breakdown     : ₹10 × ${Math.min(successCount, 50)}${successCount > 50 ? `  +  ₹5 × ${successCount - 50}` : ''}`);
+  log(`      Avg per response   : ₹${chargedAvgPerSub.toFixed(2)}`);
+  log(`      Net profit         : ₹${profitINR.toFixed(4)}`);
   log(`   ${"-".repeat(50)}`);
   log(`   Successful : ${successCount}  |  Failed : ${failCount}  |  Total : ${numberOfResponses}`);
   log(`${"═".repeat(60)}\n`);
 
-  return { successCount, failCount, cost: { totalINR: gc.costINR, totalCalls: gc.calls, inputTokens: gc.inputTokens, outputTokens: gc.outputTokens } };
+  return { successCount, failCount, cost: { totalINR: gc.costINR, chargedINR, totalCalls: gc.calls, inputTokens: gc.inputTokens, outputTokens: gc.outputTokens } };
 }
 
 export async function checkFormAccess(formUrl) {

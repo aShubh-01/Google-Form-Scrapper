@@ -241,15 +241,11 @@ export default function App() {
   const [hasClickedWhatsApp, setHasClickedWhatsApp] = useState(false);
 
   const calculatePrice = (count) => {
-    let multiplier;
-    if (count <= 25) {
-      multiplier = 3;
-    } else if (count <= 50) {
-      multiplier = 2.5;
-    } else {
-      multiplier = 2;
-    }
-    return count * multiplier;
+    // Tier 1: ₹10 per response for 1–50
+    // Tier 2: ₹5 per response for 51–100
+    const tier1 = Math.min(count, 50) * 10;
+    const tier2 = Math.max(count - 50, 0) * 5;
+    return tier1 + tier2;
   };
   const price = calculatePrice(numberOfResponses).toFixed(2);
 
@@ -555,11 +551,17 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="pt-6 border-t border-white/10 mt-6">
-                <div className="flex justify-between items-center mb-6">
-                  <span className="text-slate-400">Total Price</span>
-                  <span className="text-3xl font-bold">₹{price}</span>
-                </div>
+                <div className="pt-6 border-t border-white/10 mt-6">
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="text-slate-400">Total Price</span>
+                    <span className="text-3xl font-bold">₹{price}</span>
+                  </div>
+                  <div className="text-xs text-slate-500 text-right mb-6">
+                    {numberOfResponses <= 50
+                      ? `₹10 × ${numberOfResponses} response${numberOfResponses !== 1 ? 's' : ''}`
+                      : `₹10 × 50  +  ₹5 × ${numberOfResponses - 50}`
+                    }
+                  </div>
 
                 <button
                   type="submit"
