@@ -15,15 +15,15 @@ import * as SEL from "./selectors.js";
 // ---------------------------------------------------------------------------
 
 export const FIELD_TYPES = {
-  SHORT_TEXT:      "SHORT_TEXT",
-  LONG_TEXT:       "LONG_TEXT",
+  SHORT_TEXT: "SHORT_TEXT",
+  LONG_TEXT: "LONG_TEXT",
   MULTIPLE_CHOICE: "MULTIPLE_CHOICE",
-  CHECKBOX:        "CHECKBOX",
-  DROPDOWN:        "DROPDOWN",
-  LINEAR_SCALE:    "LINEAR_SCALE",
-  DATE:            "DATE",
-  TIME:            "TIME",
-  UNKNOWN:         "UNKNOWN",
+  CHECKBOX: "CHECKBOX",
+  DROPDOWN: "DROPDOWN",
+  LINEAR_SCALE: "LINEAR_SCALE",
+  DATE: "DATE",
+  TIME: "TIME",
+  UNKNOWN: "UNKNOWN",
 };
 
 // ---------------------------------------------------------------------------
@@ -42,8 +42,8 @@ export async function extractFormQuestions(page) {
   return page.evaluate(() => {
     const TYPE_CODE_MAP = {
       0: "SHORT_TEXT", 1: "LONG_TEXT", 2: "MULTIPLE_CHOICE",
-      3: "DROPDOWN",   4: "CHECKBOX",  5: "LINEAR_SCALE",
-      9: "DATE",      10: "TIME",    18: "LINEAR_SCALE", // Rating (Stars) uses same logic as Linear Scale
+      3: "DROPDOWN", 4: "CHECKBOX", 5: "LINEAR_SCALE",
+      9: "DATE", 10: "TIME", 18: "LINEAR_SCALE", // Rating (Stars) uses same logic as Linear Scale
     };
 
     const blocks = document.querySelectorAll('[jsmodel="CP1oW"][data-params]');
@@ -54,15 +54,15 @@ export async function extractFormQuestions(page) {
       const jsonStr = raw.startsWith("%.@.") ? "[" + raw.slice(4) : raw;
 
       let questionId = null, entryId = null, title = "", typeCode = -1,
-          options = [], required = false, scaleMin = null, scaleMax = null;
+        options = [], required = false, scaleMin = null, scaleMax = null;
 
       try {
         const wrapper = JSON.parse(jsonStr);
         const q = wrapper[0];
 
         questionId = q[0];
-        title      = q[1] || "";
-        typeCode   = q[3];
+        title = q[1] || "";
+        typeCode = q[3];
 
         const group = Array.isArray(q[4]) && q[4][0];
         if (group) {
@@ -128,7 +128,10 @@ export async function isConfirmationPage(page) {
 
 export async function clickNext(page) {
   const NAV_TIMEOUT = 15_000;
-  
+
+  // Snapshot page history before clicking so we can detect a real page change
+  const historyBefore = await getPageHistory(page);
+
   try {
     await Promise.all([
       page.waitForNavigation({ waitUntil: "networkidle2", timeout: NAV_TIMEOUT }),
@@ -141,14 +144,31 @@ export async function clickNext(page) {
       const alerts = document.querySelectorAll('[role="alert"]');
       return Array.from(alerts).some((el) => el.innerText?.trim().length > 0);
     });
-    
+
     if (validationVisible) {
       throw new Error("[helpers] Form validation blocked Next — a required field was not filled correctly.");
     }
-    
-    // Sometimes Puppeteer throws "Navigating frame was detached" or timeout on SPA transitions.
-    // If no validation error, assume it succeeded and just wait for the new page questions to render.
-    await page.waitForSelector('[jsmodel="CP1oW"][data-params]', { timeout: 5000 }).catch(() => {});
+
+    // For SPA transitions Puppeteer may fire a navigation timeout even when the page
+    // did update. Wait up to the remaining budget for new questions to appear.
+    await page.waitForSelector('[jsmodel="CP1oW"][data-params]', { timeout: 5000 }).catch(() => { });
+  }
+
+  // ── Hard 15-second guard: confirm the page actually advanced ─────────────
+  // Poll until history changes (new page loaded) or the deadline is reached.
+  const deadline = Date.now() + NAV_TIMEOUT;
+  let pageAdvanced = false;
+  while (Date.now() < deadline) {
+    const historyNow = await getPageHistory(page);
+    if (historyNow !== historyBefore) {
+      pageAdvanced = true;
+      break;
+    }
+    await sleep(300);
+  }
+
+  if (!pageAdvanced) {
+    throw new Error("[helpers] Next page did not load within 15 seconds — marking submission as failed.");
   }
 }
 
@@ -160,7 +180,7 @@ export async function clickSubmit(page) {
     ]);
   } catch (err) {
     // Similar to Next, ignore navigation errors if the confirmation message appears
-    await page.waitForSelector(SEL.CONFIRMATION_MSG, { timeout: 5000 }).catch(() => {});
+    await page.waitForSelector(SEL.CONFIRMATION_MSG, { timeout: 5000 }).catch(() => { });
   }
 }
 
@@ -171,14 +191,14 @@ export async function clickSubmit(page) {
 export async function fillField(page, question, answer) {
   const { type, title } = question;
   switch (type) {
-    case FIELD_TYPES.SHORT_TEXT:      await fillShortText(page, question, String(answer)); break;
-    case FIELD_TYPES.LONG_TEXT:       await fillLongText(page, question, String(answer)); break;
+    case FIELD_TYPES.SHORT_TEXT: await fillShortText(page, question, String(answer)); break;
+    case FIELD_TYPES.LONG_TEXT: await fillLongText(page, question, String(answer)); break;
     case FIELD_TYPES.MULTIPLE_CHOICE: await selectRadioOption(page, question, String(answer)); break;
-    case FIELD_TYPES.CHECKBOX:        await selectCheckboxOptions(page, question, Array.isArray(answer) ? answer : [String(answer)]); break;
-    case FIELD_TYPES.DROPDOWN:        await selectDropdownOption(page, question, String(answer)); break;
-    case FIELD_TYPES.LINEAR_SCALE:    await selectScalePoint(page, question, Number(answer)); break;
-    case FIELD_TYPES.DATE:            await fillDateField(page, question, String(answer)); break;
-    case FIELD_TYPES.TIME:            await fillTimeField(page, question, String(answer)); break;
+    case FIELD_TYPES.CHECKBOX: await selectCheckboxOptions(page, question, Array.isArray(answer) ? answer : [String(answer)]); break;
+    case FIELD_TYPES.DROPDOWN: await selectDropdownOption(page, question, String(answer)); break;
+    case FIELD_TYPES.LINEAR_SCALE: await selectScalePoint(page, question, Number(answer)); break;
+    case FIELD_TYPES.DATE: await fillDateField(page, question, String(answer)); break;
+    case FIELD_TYPES.TIME: await fillTimeField(page, question, String(answer)); break;
     default: console.warn(`[helpers] Unknown type "${type}" for "${title}" — skipping.`);
   }
 }
@@ -191,7 +211,7 @@ async function fillShortText(page, question, answer) {
   const block = await getQuestionBlock(page, question);
   const input = await block.$(SEL.SHORT_TEXT_INPUT);
   if (!input) throw new Error(`[helpers] Short-text input not found: "${question.title}"`);
-  
+
   await input.evaluate((el, val) => {
     el.focus();
     el.value = val;
@@ -205,7 +225,7 @@ async function fillLongText(page, question, answer) {
   const block = await getQuestionBlock(page, question);
   const ta = await block.$(SEL.LONG_TEXT_INPUT);
   if (!ta) throw new Error(`[helpers] Textarea not found: "${question.title}"`);
-  
+
   await ta.evaluate((el, val) => {
     el.focus();
     el.value = val;
@@ -344,7 +364,7 @@ async function fillDateField(page, question, dateStr) {
   }
 
   const block = await getQuestionBlock(page, question);
-  
+
   // Try new single date input first
   const dateInput = await block.$(SEL.DATE_INPUT);
   if (dateInput) {
@@ -361,21 +381,104 @@ async function fillDateField(page, question, dateStr) {
 
   // Fallback to legacy 3-field date
   const [year, month, day] = formattedDate.split("-");
-  const yearInput  = await block.$(SEL.DATE_YEAR_INPUT);
+  const yearInput = await block.$(SEL.DATE_YEAR_INPUT);
   const monthInput = await block.$(SEL.DATE_MONTH_INPUT);
-  const dayInput   = await block.$(SEL.DATE_DAY_INPUT);
+  const dayInput = await block.$(SEL.DATE_DAY_INPUT);
   if (monthInput) { await monthInput.click({ clickCount: 3 }); await monthInput.type(month); }
-  if (dayInput)   { await dayInput.click({ clickCount: 3 }); await dayInput.type(day); }
-  if (yearInput)  { await yearInput.click({ clickCount: 3 }); await yearInput.type(year); }
+  if (dayInput) { await dayInput.click({ clickCount: 3 }); await dayInput.type(day); }
+  if (yearInput) { await yearInput.click({ clickCount: 3 }); await yearInput.type(year); }
 }
 
 async function fillTimeField(page, question, timeStr) {
   const [hour, minute] = timeStr.split(":");
   const block = await getQuestionBlock(page, question);
-  const hourInput   = await block.$(SEL.TIME_HOUR_INPUT);
+  const hourInput = await block.$(SEL.TIME_HOUR_INPUT);
   const minuteInput = await block.$(SEL.TIME_MINUTE_INPUT);
-  if (hourInput)   { await hourInput.click({ clickCount: 3 }); await hourInput.type(hour); }
+  if (hourInput) { await hourInput.click({ clickCount: 3 }); await hourInput.type(hour); }
   if (minuteInput) { await minuteInput.click({ clickCount: 3 }); await minuteInput.type(minute); }
+}
+
+// ---------------------------------------------------------------------------
+// Pre-click Answer Verification
+// ---------------------------------------------------------------------------
+
+/**
+ * Verifies that every question on the current page has a visible, non-empty
+ * answer selected/filled in the DOM.  Returns an array of unfilled question
+ * titles so the caller can decide what to do.
+ */
+export async function verifyPageAnswers(page, questions) {
+  const unfilled = [];
+
+  for (const question of questions) {
+    try {
+      const filled = await page.evaluate((q) => {
+        // Locate the question block by its title text
+        const blocks = document.querySelectorAll('[jsmodel="CP1oW"][data-params]');
+        let block = null;
+        const needle = q.title.trim().replace(/\s+/g, " ");
+        for (const b of blocks) {
+          const titleEl = b.querySelector(".M7eMe");
+          if (titleEl && titleEl.innerText?.trim().replace(/\s+/g, " ") === needle) {
+            block = b;
+            break;
+          }
+        }
+        if (!block) return true; // can't locate block — don't flag it
+
+        switch (q.type) {
+          case "SHORT_TEXT": {
+            const input = block.querySelector('input[type="text"], input:not([type])') ||
+                          block.querySelector('input');
+            return input ? input.value.trim().length > 0 : false;
+          }
+          case "LONG_TEXT": {
+            const ta = block.querySelector('textarea');
+            return ta ? ta.value.trim().length > 0 : false;
+          }
+          case "MULTIPLE_CHOICE": {
+            const radios = block.querySelectorAll('[role="radio"]');
+            return Array.from(radios).some(r => r.getAttribute('aria-checked') === 'true');
+          }
+          case "CHECKBOX": {
+            const boxes = block.querySelectorAll('[role="checkbox"]');
+            return Array.from(boxes).some(b => b.getAttribute('aria-checked') === 'true');
+          }
+          case "DROPDOWN": {
+            // Google Forms dropdown shows selected value in a span
+            const selected = block.querySelector('.vRMGwf, [data-value]');
+            if (selected) {
+              const val = selected.getAttribute('data-value') || selected.innerText?.trim();
+              return val && val.length > 0;
+            }
+            return false;
+          }
+          case "LINEAR_SCALE": {
+            const radios = block.querySelectorAll('[role="radio"]');
+            return Array.from(radios).some(r => r.getAttribute('aria-checked') === 'true');
+          }
+          case "DATE": {
+            const inputs = block.querySelectorAll('input[type="date"], input[aria-label]');
+            return Array.from(inputs).some(i => i.value && i.value.trim().length > 0);
+          }
+          case "TIME": {
+            const inputs = block.querySelectorAll('input[type="time"], input[aria-label]');
+            return Array.from(inputs).some(i => i.value && i.value.trim().length > 0);
+          }
+          default:
+            return true; // unknown type — skip check
+        }
+      }, { title: question.title, type: question.type });
+
+      if (!filled) {
+        unfilled.push(question.title);
+      }
+    } catch (_) {
+      // If eval throws, don't block — just skip this question
+    }
+  }
+
+  return unfilled;
 }
 
 // ---------------------------------------------------------------------------

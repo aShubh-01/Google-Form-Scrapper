@@ -29,6 +29,7 @@ import {
   clickNext,
   clickSubmit,
   fillField,
+  verifyPageAnswers,
   sleep,
   log,
 } from "./helpers.js";
@@ -260,9 +261,20 @@ export async function runScraper(payload) {
           break; // exit page loop for this submission
 
         } else {
+          // ---- Verify fields are actually filled before clicking Next ----
+          if (questions.length > 0) {
+            const unfilled = await verifyPageAnswers(page, questions);
+            if (unfilled.length > 0) {
+              log(`[Sub ${i + 1}] ⚠️  Pre-Next verification: ${unfilled.length} question(s) appear unfilled in DOM:`);
+              unfilled.forEach((t) => log(`      - ${t}`));
+            } else {
+              log(`[Sub ${i + 1}] ✅ Pre-Next verification passed — all ${questions.length} fields confirmed filled.`);
+            }
+          }
+
           // ---- Next page ----
           log(`\n[Sub ${i + 1}] ➡️  Clicking Next...`);
-          await clickNext(page);
+          await clickNext(page); // throws if new page doesn't open within 15 s
           pageNumber++;
           await sleep(500); // let page settle
         }
